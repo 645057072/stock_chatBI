@@ -1,0 +1,20 @@
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  background: #141414;
+  color: #f0f0f0;
+}
+
+a {
+  color: #5b9bd5;
+}

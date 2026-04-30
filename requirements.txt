@@ -1,0 +1,12 @@
+tushare>=1.2.89
+pandas>=2.0.0
+openpyxl>=3.1.0
+pymysql>=1.1.0
+statsmodels>=0.14.0
+prophet>=1.1.5
+
+# assistant_ticket_bot-3.py Web 界面（qwen-agent WebUI）:
+# Python 3.14 请勿使用 pip install "qwen-agent[gui]"：该 extra 固定 pydantic-core==2.23.4，无 cp314 轮子会触发 Rust 编译，
+# 且 cargo 常因系统代理 127.0.0.1:7890 未启动而失败。请单独安装与 qwen-agent 0.0.34 的 gui extra 同版本组件、保留当前 pydantic：
+# pip install "gradio==5.23.1" "gradio-client==1.8.0" "modelscope-studio==1.1.7"
+# 未安装上述包时，脚本入口会自动回退终端模式。

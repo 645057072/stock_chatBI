@@ -1,0 +1,75 @@
+# ChatBI 一键编排：独立网络 chatbi_case_net，宿主机端口默认 18080/18443，避免与 ECS 其他项目冲突
+name: chatbi-case
+
+services:
+  mysql:
+    image: mysql:8.0
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-devroot}
+      MYSQL_DATABASE: chat_bi_case
+    volumes:
+      - chatbi_mysql_data:/var/lib/mysql
+      - ./schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+      - ./deploy/init-app.sql:/docker-entrypoint-initdb.d/02_init_app.sql:ro
+    networks:
+      - chatbi_internal
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p\"$$MYSQL_ROOT_PASSWORD\" || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 8
+      start_period: 40s
+
+  redis:
+    image: redis:7-alpine
+    networks:
+      - chatbi_internal
+    command: ["redis-server", "--appendonly", "yes"]
+
+  api:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    env_file:
+      - .env
+    environment:
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_USER: root
+      MYSQL_PASSWORD: ${MYSQL_ROOT_PASSWORD:-devroot}
+      MYSQL_DATABASE: chat_bi_case
+      REDIS_URL: redis://redis:6379/0
+      STOCK_BOT_IMAGE_DIR: /app/image_show
+      # 仅用 https://宿主机:CHATBI_HTTPS_PORT 对外时可改为 true；用 http://:CHATBI_HTTP_PORT 时必须为 false
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    volumes:
+      - chatbi_images:/app/image_show
+    networks:
+      - chatbi_internal
+
+  nginx:
+    build:
+      context: .
+      dockerfile: deploy/nginx.Dockerfile
+    ports:
+      - "${CHATBI_HTTP_PORT:-18080}:80"
+      - "${CHATBI_HTTPS_PORT:-18443}:443"
+    depends_on:
+      - api
+    networks:
+      - chatbi_internal
+
+networks:
+  chatbi_internal:
+    name: chatbi_case_net
+    driver: bridge
+
+volumes:
+  chatbi_mysql_data:
+  chatbi_images:

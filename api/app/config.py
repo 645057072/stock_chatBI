@@ -2,13 +2,19 @@
 """应用配置（环境变量）。"""
 
 from functools import lru_cache
+
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    mysql_host: str = "127.0.0.1"
+    # Docker 编排下在 compose 中设置 CHATBI_MYSQL_HOST=mysql，优先于宿主机 .env 里的 MYSQL_HOST=127.0.0.1，避免容器内无法解析 mysql
+    mysql_host: str = Field(
+        default="127.0.0.1",
+        validation_alias=AliasChoices("CHATBI_MYSQL_HOST", "MYSQL_HOST"),
+    )
     mysql_port: int = 3306
     mysql_user: str = "root"
     mysql_password: str = "AAAAa@321"

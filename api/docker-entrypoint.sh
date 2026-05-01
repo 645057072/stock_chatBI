@@ -2,8 +2,8 @@
 # 启动 API 前等待 MySQL / Redis 可解析且端口可达，避免 register 时出现 Name or service not known / 连接拒绝。
 set -e
 
-MYSQL_H="${MYSQL_HOST:-mysql}"
-MYSQL_P="${MYSQL_PORT:-3306}"
+MYSQL_H="${CHATBI_MYSQL_HOST:-${MYSQL_HOST:-mysql}}"
+MYSQL_P="${CHATBI_MYSQL_PORT:-${MYSQL_PORT:-3306}}"
 
 # 从 REDIS_URL 解析主机与端口，默认 redis:6379
 REDIS_URL_VAL="${REDIS_URL:-redis://redis:6379/0}"

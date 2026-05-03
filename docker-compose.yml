@@ -11,10 +11,19 @@
 services:
   mysql:
     image: mysql:8.0
-    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    # innodb-use-native-aio=0：避免部分 ECS/overlay 存储上出现 Inappropriate ioctl for device 导致 mysqld 起不来
+    # innodb-buffer-pool-size：低配机器减小缓冲池，降低首次初始化内存峰值
+    command:
+      - mysqld
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --innodb-use-native-aio=0
+      - --innodb-buffer-pool-size=128M
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-devroot}
       MYSQL_DATABASE: chat_bi_case
+      # 跳过时区表导入，减轻初始化负担、避免部分环境 tz 数据问题
+      MYSQL_INITDB_SKIP_TZINFO: "1"
     # 不向 0.0.0.0 暴露，避免与考试系统 MySQL 宿主机端口争抢；本机工具可用 127.0.0.1:CHATBI_MYSQL_PUBLISH_PORT
     ports:
       - "127.0.0.1:${CHATBI_MYSQL_PUBLISH_PORT:-13306}:3306"
@@ -30,8 +39,8 @@ services:
       test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p\"$$MYSQL_ROOT_PASSWORD\" || exit 1"]
       interval: 10s
       timeout: 5s
-      retries: 8
-      start_period: 40s
+      retries: 12
+      start_period: 90s
 
   redis:
     image: redis:7-alpine

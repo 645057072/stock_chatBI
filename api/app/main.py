@@ -11,7 +11,7 @@ from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import text
 from starlette.concurrency import run_in_threadpool
 
@@ -46,10 +46,25 @@ class RegisterBody(BaseModel):
     username: str = Field(..., min_length=3, max_length=32)
     password: str = Field(..., min_length=8, max_length=128)
 
+    @field_validator("password")
+    @classmethod
+    def password_within_bcrypt_bytes(cls, v: str) -> str:
+        # bcrypt 仅支持最多 72 字节；超长会在哈希阶段抛错导致 500
+        if len(v.encode("utf-8")) > 72:
+            raise ValueError("密码过长（UTF-8 不可超过 72 字节），请缩短或使用更少字符")
+        return v
+
 
 class LoginBody(BaseModel):
     username: str = Field(..., min_length=1, max_length=32)
     password: str = Field(..., min_length=1, max_length=128)
+
+    @field_validator("password")
+    @classmethod
+    def password_within_bcrypt_bytes_login(cls, v: str) -> str:
+        if len(v.encode("utf-8")) > 72:
+            raise ValueError("密码过长（UTF-8 不可超过 72 字节）")
+        return v
 
 
 class ChatBody(BaseModel):

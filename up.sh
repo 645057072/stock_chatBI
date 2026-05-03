@@ -20,8 +20,9 @@ set +a
 
 HTTP_PORT="${CHATBI_HTTP_PORT:-18080}"
 HTTPS_PORT="${CHATBI_HTTPS_PORT:-18443}"
-MYSQL_PUB="${CHATBI_MYSQL_PUBLISH_PORT:-13306}"
-REDIS_PUB="${CHATBI_REDIS_PUBLISH_PORT:-16379}"
+# 与 docker-compose.yml 中固定映射一致
+MYSQL_PUB=13306
+REDIS_PUB=16379
 
 # 若本机端口已被监听，返回 0（占用）
 port_is_listening() {

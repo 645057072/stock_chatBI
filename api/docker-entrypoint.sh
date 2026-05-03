@@ -3,14 +3,14 @@
 set -e
 
 MYSQL_H="${CHATBI_MYSQL_HOST:-${MYSQL_HOST:-mysql}}"
-MYSQL_P="${CHATBI_MYSQL_PORT:-${MYSQL_PORT:-3306}}"
+MYSQL_P="${CHATBI_MYSQL_PORT:-${MYSQL_PORT:-13306}}"
 
-# 从 REDIS_URL 解析主机与端口，默认 redis:6379
-REDIS_URL_VAL="${REDIS_URL:-redis://redis:6379/0}"
+# 从 REDIS_URL 解析主机与端口，默认 redis:16379（与 compose 中 Redis 监听端口一致）
+REDIS_URL_VAL="${REDIS_URL:-redis://redis:16379/0}"
 REDIS_H=$(printf '%s' "$REDIS_URL_VAL" | sed -n 's|^redis://\([^:/]*\).*|\1|p')
 REDIS_P=$(printf '%s' "$REDIS_URL_VAL" | sed -n 's|^redis://[^:]*:\([0-9]*\)/.*|\1|p')
 REDIS_H="${REDIS_H:-redis}"
-REDIS_P="${REDIS_P:-6379}"
+REDIS_P="${REDIS_P:-16379}"
 
 wait_tcp() {
   _label="$1"

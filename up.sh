@@ -20,6 +20,8 @@ set +a
 
 HTTP_PORT="${CHATBI_HTTP_PORT:-18080}"
 HTTPS_PORT="${CHATBI_HTTPS_PORT:-18443}"
+MYSQL_PUB="${CHATBI_MYSQL_PUBLISH_PORT:-13306}"
+REDIS_PUB="${CHATBI_REDIS_PUBLISH_PORT:-16379}"
 
 # 若本机端口已被监听，返回 0（占用）
 port_is_listening() {
@@ -34,6 +36,9 @@ port_is_listening() {
 
 if [[ "${SKIP_PORT_CHECK:-0}" != "1" ]]; then
   occupied=0
+  if [[ "$HTTP_PORT" == "80" || "$HTTP_PORT" == "443" ]]; then
+    echo "警告：CHATBI_HTTP_PORT=${HTTP_PORT} 可能与 Ai_Eaxm_system（常用 80）冲突，建议使用 18080 等非标准端口。" >&2
+  fi
   if port_is_listening "$HTTP_PORT"; then
     echo "错误：HTTP 映射端口 ${HTTP_PORT} 已被占用（CHATBI_HTTP_PORT）。请修改 .env 或释放端口，避免影响其它系统。"
     ss -tuln -H 2>/dev/null | awk -v p=":${HTTP_PORT}$" '$5 ~ p {print}' || true
@@ -42,6 +47,16 @@ if [[ "${SKIP_PORT_CHECK:-0}" != "1" ]]; then
   if port_is_listening "$HTTPS_PORT"; then
     echo "错误：HTTPS 映射端口 ${HTTPS_PORT} 已被占用（CHATBI_HTTPS_PORT）。请修改 .env 或释放端口。"
     ss -tuln -H 2>/dev/null | awk -v p=":${HTTPS_PORT}$" '$5 ~ p {print}' || true
+    occupied=1
+  fi
+  if port_is_listening "$MYSQL_PUB"; then
+    echo "错误：ChatBI MySQL 映射端口 ${MYSQL_PUB}（CHATBI_MYSQL_PUBLISH_PORT）已被占用，请修改 .env。"
+    ss -tuln -H 2>/dev/null | awk -v p=":${MYSQL_PUB}$" '$5 ~ p {print}' || true
+    occupied=1
+  fi
+  if port_is_listening "$REDIS_PUB"; then
+    echo "错误：ChatBI Redis 映射端口 ${REDIS_PUB}（CHATBI_REDIS_PUBLISH_PORT）已被占用，请修改 .env。"
+    ss -tuln -H 2>/dev/null | awk -v p=":${REDIS_PUB}$" '$5 ~ p {print}' || true
     occupied=1
   fi
   if [[ "$occupied" -ne 0 ]]; then
@@ -59,3 +74,4 @@ docker compose up -d --build
 echo ""
 echo "已启动。HTTP  访问宿主机端口：${HTTP_PORT}"
 echo "         HTTPS 访问宿主机端口：${HTTPS_PORT}（镜像内自签名证书时浏览器需信任）"
+echo "         （本机调试）MySQL 127.0.0.1:${MYSQL_PUB}  Redis 127.0.0.1:${REDIS_PUB}"

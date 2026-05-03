@@ -1,6 +1,8 @@
 # ChatBI 一键编排：
 # - 默认使用 Compose 项目名前缀隔离网络/卷（强烈建议在服务器设置唯一 COMPOSE_PROJECT_NAME）
-# - 宿主机端口默认 18080/18443（避免占用 80/443，防止影响其它系统）
+# - 宿主机端口默认 18080/18443（避免占用 80/443，防止影响 Ai_Eaxm_system）
+# - MySQL / Redis 仅绑定 127.0.0.1，且使用 13306 / 16379，避免与 Ai_Eaxm_system 常用的宿主机 3306 / 6379 冲突；
+#   容器内 api/nginx 仍通过服务名 mysql、redis 访问，不受下列映射影响。
 # 示例：
 #   export COMPOSE_PROJECT_NAME=chatbi_case_prod
 #   export CHATBI_HTTP_PORT=18080
@@ -13,6 +15,9 @@ services:
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-devroot}
       MYSQL_DATABASE: chat_bi_case
+    # 不向 0.0.0.0 暴露，避免与考试系统 MySQL 宿主机端口争抢；本机工具可用 127.0.0.1:CHATBI_MYSQL_PUBLISH_PORT
+    ports:
+      - "127.0.0.1:${CHATBI_MYSQL_PUBLISH_PORT:-13306}:3306"
     volumes:
       - chatbi_mysql_data:/var/lib/mysql
       - ./schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
@@ -30,6 +35,8 @@ services:
 
   redis:
     image: redis:7-alpine
+    ports:
+      - "127.0.0.1:${CHATBI_REDIS_PUBLISH_PORT:-16379}:6379"
     networks:
       chatbi_internal:
         aliases:
@@ -64,6 +71,18 @@ services:
       - chatbi_images:/app/image_show
     networks:
       - chatbi_internal
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5).read()",
+        ]
+      interval: 15s
+      timeout: 10s
+      retries: 8
+      start_period: 180s
 
   nginx:
     build:
@@ -73,7 +92,8 @@ services:
       - "${CHATBI_HTTP_PORT:-18080}:80"
       - "${CHATBI_HTTPS_PORT:-18443}:443"
     depends_on:
-      - api
+      api:
+        condition: service_healthy
     networks:
       - chatbi_internal
 

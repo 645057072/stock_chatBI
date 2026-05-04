@@ -35,4 +35,40 @@ wait_tcp() {
 wait_tcp "MySQL" "$MYSQL_H" "$MYSQL_P" 60
 wait_tcp "Redis" "$REDIS_H" "$REDIS_P" 30
 
+# 部分 ECS 上 Docker 内嵌 DNS 在主线程可用，在 uvicorn run_in_threadpool 的工作线程里 getaddrinfo 间歇失败。
+# 等待 TCP 已成功说明当时可解析，此处把「主机名 -> IPv4」写入 /etc/hosts（nsswitch 通常 files 优先），消除注册/登录 500。
+pin_host() {
+  _name="$1"
+  case "$_name" in
+    "" | localhost | 127.0.0.1) return 0 ;;
+  esac
+  if printf '%s\n' "$_name" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
+    return 0
+  fi
+  if ! command -v getent >/dev/null 2>&1; then
+    echo "[entrypoint] 未找到 getent，跳过将 ${_name} 写入 /etc/hosts" >&2
+    return 0
+  fi
+  _ip=$(getent ahostsv4 "$_name" 2>/dev/null | awk '/STREAM/ { print $1; exit }')
+  if [ -z "$_ip" ]; then
+    _ip=$(getent hosts "$_name" 2>/dev/null | awk '{ print $1; exit }')
+  fi
+  if [ -z "$_ip" ]; then
+    echo "[entrypoint] 警告：getent 无法解析 ${_name}，跳过 /etc/hosts 固定" >&2
+    return 0
+  fi
+  if grep -qF "${_ip} ${_name}" /etc/hosts 2>/dev/null; then
+    echo "[entrypoint] /etc/hosts 已存在 ${_name} -> ${_ip}"
+    return 0
+  fi
+  if ! printf '%s\n' "${_ip} ${_name}" >> /etc/hosts 2>/dev/null; then
+    echo "[entrypoint] 警告：无法写入 /etc/hosts（只读根文件系统？），仍依赖 DNS 解析 ${_name}" >&2
+    return 0
+  fi
+  echo "[entrypoint] 已写入 /etc/hosts：${_ip} ${_name}"
+}
+
+pin_host "$MYSQL_H"
+pin_host "$REDIS_H"
+
 exec "$@"

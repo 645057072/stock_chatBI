@@ -11,6 +11,8 @@
 services:
   mysql:
     image: mysql:8.0
+    # 固定容器名便于 DNS（部分主机对服务名 mysql 解析不稳定）；与 COMPOSE_PROJECT_NAME 组合避免冲突
+    container_name: ${COMPOSE_PROJECT_NAME:-chatbi_case}_mysql
     # shared memory 过小会导致 InnoDB 在部分主机上异常退出；有助于缓解 ioctl / daemon 检测类错误
     shm_size: 256mb
     command:
@@ -43,6 +45,7 @@ services:
 
   redis:
     image: redis:7-alpine
+    container_name: ${COMPOSE_PROJECT_NAME:-chatbi_case}_redis
     networks:
       chatbi_internal:
         aliases:
@@ -65,15 +68,16 @@ services:
     env_file:
       - .env
     environment:
-      CHATBI_MYSQL_HOST: ${CHATBI_MYSQL_HOST:-mysql}
-      CHATBI_MYSQL_PORT: ${CHATBI_MYSQL_PORT:-3309}
-      MYSQL_HOST: ${CHATBI_MYSQL_HOST:-mysql}
-      MYSQL_PORT: ${CHATBI_MYSQL_PORT:-3309}
+      # 默认连「项目名_mysql」容器名；若在 .env 写 CHATBI_MYSQL_HOST=mysql 且该名无法解析请删除该项以使用默认
+      CHATBI_MYSQL_HOST: "${CHATBI_MYSQL_HOST:-${COMPOSE_PROJECT_NAME:-chatbi_case}_mysql}"
+      CHATBI_MYSQL_PORT: "${CHATBI_MYSQL_PORT:-3309}"
+      MYSQL_HOST: "${CHATBI_MYSQL_HOST:-${COMPOSE_PROJECT_NAME:-chatbi_case}_mysql}"
+      MYSQL_PORT: "${CHATBI_MYSQL_PORT:-3309}"
       MYSQL_USER: ${MYSQL_USER:-root}
       # 未设置 MYSQL_PASSWORD 时沿用 MYSQL_ROOT_PASSWORD，避免仅配置了 root 密码导致 API 仍用 devroot 连库而注册 500
       MYSQL_PASSWORD: ${MYSQL_PASSWORD:-${MYSQL_ROOT_PASSWORD:-devroot}}
       MYSQL_DATABASE: ${MYSQL_DATABASE:-chat_bi_case}
-      REDIS_URL: ${REDIS_URL:-redis://redis:6381/0}
+      REDIS_URL: "${REDIS_URL:-redis://${COMPOSE_PROJECT_NAME:-chatbi_case}_redis:6381/0}"
       STOCK_BOT_IMAGE_DIR: /app/image_show
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
     depends_on:

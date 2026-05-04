@@ -12,5 +12,5 @@ docker compose up -d --build
 echo.
 echo 默认 HTTP  端口见 .env 中 CHATBI_HTTP_PORT（未改则为 18080）
 echo 默认 HTTPS 端口见 .env 中 CHATBI_HTTPS_PORT（未改则为 18443，镜像内为自签名证书）
-echo MySQL 仅本机 127.0.0.1:13306  Redis 仅本机 127.0.0.1:16379（与 3306/6379 错开）
+echo ECS/Linux：MySQL、Redis 默认仅 Docker 网络内访问（不占宿主机 13306/16379）；本地调试可在 compose 中临时加 ports 映射。
 pause

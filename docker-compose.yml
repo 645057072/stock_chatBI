@@ -1,17 +1,18 @@
-# ChatBI 一键编排：
-# - 默认使用 Compose 项目名前缀隔离网络/卷（强烈建议在服务器设置唯一 COMPOSE_PROJECT_NAME）
-# - 宿主机 Web：18080 / 18443（避免与 Ai_Eaxm_system 的 80 冲突）
-# - MySQL / Redis：容器内与宿主机映射均使用 13306 / 16379，不再使用 3306 / 6379（与考试系统默认端口彻底错开）
-# 示例：
-#   export COMPOSE_PROJECT_NAME=chatbi_case_prod
-#   export CHATBI_HTTP_PORT=18080
-#   export CHATBI_HTTPS_PORT=18443
+# ChatBI — 阿里云 ECS Docker 部署（与本机其它应用隔离）
+#
+# - Web 入口端口由 .env 中 CHATBI_HTTP_PORT / CHATBI_HTTPS_PORT 配置（勿占用其它业务已用端口）。
+# - MySQL / Redis 默认仅在 Compose 网络内访问（不向宿主机映射端口），避免与 ECS 上其它中间件端口冲突。
+# - 连接信息可在 .env 中手动配置：CHATBI_MYSQL_HOST、CHATBI_MYSQL_PORT、MYSQL_USER、MYSQL_PASSWORD、
+#   MYSQL_DATABASE、REDIS_URL（内置默认值见 .env.example）。
+# - 首次启动：MySQL 容器会自动执行 schema.sql、deploy/init-app.sql 完成库表初始化。
+#
+# 首次部署建议：chmod +x ecs-first-up.sh && ./ecs-first-up.sh
 
 services:
   mysql:
     image: mysql:8.0
-    # innodb-use-native-aio=0：缓解 ECS/overlay 上 Inappropriate ioctl for device
-    # max-allowed-packet：减轻 docker-entrypoint 执行大 SQL 时出现 Lost connection during query
+    # shared memory 过小会导致 InnoDB 在部分主机上异常退出；有助于缓解 ioctl / daemon 检测类错误
+    shm_size: 256mb
     command:
       - mysqld
       - --port=13306
@@ -22,12 +23,9 @@ services:
       - --max-allowed-packet=256M
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-devroot}
-      MYSQL_DATABASE: chat_bi_case
-      # 与 --port 一致，供官方 entrypoint 在初始化阶段连接临时实例
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-chat_bi_case}
       MYSQL_TCP_PORT: "13306"
       MYSQL_INITDB_SKIP_TZINFO: "1"
-    ports:
-      - "127.0.0.1:13306:13306"
     volumes:
       - chatbi_mysql_data:/var/lib/mysql
       - ./schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
@@ -36,7 +34,6 @@ services:
       chatbi_internal:
         aliases:
           - mysql
-    # 使用 MYSQL_PWD，避免 root 密码中含 @、! 等字符时在 -p"..." 下被 shell 误解析
     healthcheck:
       test: ["CMD-SHELL", "MYSQL_PWD=$$MYSQL_ROOT_PASSWORD mysqladmin ping -h 127.0.0.1 -P13306 -uroot || exit 1"]
       interval: 10s
@@ -46,13 +43,17 @@ services:
 
   redis:
     image: redis:7-alpine
-    ports:
-      - "127.0.0.1:16379:16379"
     networks:
       chatbi_internal:
         aliases:
           - redis
     command: ["redis-server", "--appendonly", "yes", "--port", "16379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "-p", "16379", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 8
+      start_period: 10s
 
   api:
     build:
@@ -61,21 +62,22 @@ services:
     env_file:
       - .env
     environment:
-      CHATBI_MYSQL_HOST: mysql
-      CHATBI_MYSQL_PORT: "13306"
-      MYSQL_HOST: mysql
-      MYSQL_PORT: "13306"
-      MYSQL_USER: root
-      MYSQL_PASSWORD: ${MYSQL_ROOT_PASSWORD:-devroot}
-      MYSQL_DATABASE: chat_bi_case
-      REDIS_URL: redis://redis:16379/0
+      CHATBI_MYSQL_HOST: ${CHATBI_MYSQL_HOST:-mysql}
+      CHATBI_MYSQL_PORT: ${CHATBI_MYSQL_PORT:-13306}
+      MYSQL_HOST: ${CHATBI_MYSQL_HOST:-mysql}
+      MYSQL_PORT: ${CHATBI_MYSQL_PORT:-13306}
+      MYSQL_USER: ${MYSQL_USER:-root}
+      # 内置 MySQL 时请在 .env 中设置 MYSQL_PASSWORD（与 MYSQL_ROOT_PASSWORD 一致）；连接 RDS 时填写 RDS 账号密码
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-devroot}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-chat_bi_case}
+      REDIS_URL: ${REDIS_URL:-redis://redis:16379/0}
       STOCK_BOT_IMAGE_DIR: /app/image_show
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
     depends_on:
       mysql:
         condition: service_healthy
       redis:
-        condition: service_started
+        condition: service_healthy
     volumes:
       - chatbi_images:/app/image_show
     networks:

@@ -5,10 +5,11 @@ set -e
 MYSQL_H="${CHATBI_MYSQL_HOST:-${MYSQL_HOST:-mysql}}"
 MYSQL_P="${CHATBI_MYSQL_PORT:-${MYSQL_PORT:-13306}}"
 
-# 从 REDIS_URL 解析主机与端口，默认 redis:16379（与 compose 中 Redis 监听端口一致）
-REDIS_URL_VAL="${REDIS_URL:-redis://redis:16379/0}"
-REDIS_H=$(printf '%s' "$REDIS_URL_VAL" | sed -n 's|^redis://\([^:/]*\).*|\1|p')
-REDIS_P=$(printf '%s' "$REDIS_URL_VAL" | sed -n 's|^redis://[^:]*:\([0-9]*\)/.*|\1|p')
+# 从 REDIS_URL 解析主机与端口（支持 redis://、rediss://、含密码 URL）；未写端口时默认 16379（与本仓库 compose 一致）
+REDIS_HP=$(python -c "import os, urllib.parse as u; p=u.urlparse(os.environ.get('REDIS_URL','redis://redis:16379/0')); h=p.hostname or 'redis'; po=p.port; port=(po if po is not None else 16379); print(h, port)") || true
+[ -z "$REDIS_HP" ] && REDIS_HP="redis 16379"
+REDIS_H=$(printf '%s' "$REDIS_HP" | awk '{print $1}')
+REDIS_P=$(printf '%s' "$REDIS_HP" | awk '{print $2}')
 REDIS_H="${REDIS_H:-redis}"
 REDIS_P="${REDIS_P:-16379}"
 

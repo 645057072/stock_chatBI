@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
-# ChatBI：Linux 下一键启动前检测宿主机端口是否已被占用，避免与 ECS 上其它系统冲突。
+# ChatBI：Linux 下一键启动（仅检测 Nginx 对外端口，避免与 ECS 其它 Web 冲突）
+# MySQL/Redis 默认不映射宿主机端口，无需检测 13306/16379
 # 用法：chmod +x up.sh && ./up.sh
-# 跳过检测（不推荐）：SKIP_PORT_CHECK=1 ./up.sh
+# 跳过检测：SKIP_PORT_CHECK=1 ./up.sh
 
 set -euo pipefail
 
 cd "$(dirname "$0")"
 
 if [[ ! -f .env ]]; then
-  echo "未找到 .env，从 .env.example 复制后请至少填写 DASHSCOPE_API_KEY 等变量。"
+  echo "未找到 .env，从 .env.example 复制后请至少填写 MYSQL_ROOT_PASSWORD、DASHSCOPE_API_KEY 等。"
   cp -n .env.example .env 2>/dev/null || true
 fi
 
-# 读取端口（与 docker-compose.yml 中变量一致）
 set -a
 # shellcheck disable=SC1091
 [[ -f .env ]] && source ./.env
@@ -20,59 +20,44 @@ set +a
 
 HTTP_PORT="${CHATBI_HTTP_PORT:-18080}"
 HTTPS_PORT="${CHATBI_HTTPS_PORT:-18443}"
-# 与 docker-compose.yml 中固定映射一致
-MYSQL_PUB=13306
-REDIS_PUB=16379
 
-# 若本机端口已被监听，返回 0（占用）
 port_is_listening() {
   local port="$1"
   if ! command -v ss >/dev/null 2>&1; then
-    echo "警告：未找到 ss 命令，无法检测端口 ${port}，请自行确认未被占用。" >&2
+    echo "警告：未找到 ss 命令，无法检测端口 ${port}。" >&2
     return 1
   fi
-  # 取本地地址列，匹配末尾 :端口，避免 18080 误匹配 180800
   ss -tuln -H 2>/dev/null | awk '{print $5}' | grep -qE ":${port}$"
 }
 
 if [[ "${SKIP_PORT_CHECK:-0}" != "1" ]]; then
   occupied=0
   if [[ "$HTTP_PORT" == "80" || "$HTTP_PORT" == "443" ]]; then
-    echo "警告：CHATBI_HTTP_PORT=${HTTP_PORT} 可能与 Ai_Eaxm_system（常用 80）冲突，建议使用 18080 等非标准端口。" >&2
+    echo "警告：CHATBI_HTTP_PORT=${HTTP_PORT} 可能与其它系统 Web 入口冲突，建议使用非常用端口（如 18080、28080）。" >&2
   fi
   if port_is_listening "$HTTP_PORT"; then
-    echo "错误：HTTP 映射端口 ${HTTP_PORT} 已被占用（CHATBI_HTTP_PORT）。请修改 .env 或释放端口，避免影响其它系统。"
+    echo "错误：HTTP 映射端口 ${HTTP_PORT}（CHATBI_HTTP_PORT）已被占用。请在 .env 中改为未占用端口（例如 28080）后重试。"
     ss -tuln -H 2>/dev/null | awk -v p=":${HTTP_PORT}$" '$5 ~ p {print}' || true
     occupied=1
   fi
   if port_is_listening "$HTTPS_PORT"; then
-    echo "错误：HTTPS 映射端口 ${HTTPS_PORT} 已被占用（CHATBI_HTTPS_PORT）。请修改 .env 或释放端口。"
+    echo "错误：HTTPS 映射端口 ${HTTPS_PORT}（CHATBI_HTTPS_PORT）已被占用。请在 .env 中修改。"
     ss -tuln -H 2>/dev/null | awk -v p=":${HTTPS_PORT}$" '$5 ~ p {print}' || true
     occupied=1
   fi
-  if port_is_listening "$MYSQL_PUB"; then
-    echo "错误：ChatBI MySQL 映射端口 ${MYSQL_PUB}（CHATBI_MYSQL_PUBLISH_PORT）已被占用，请修改 .env。"
-    ss -tuln -H 2>/dev/null | awk -v p=":${MYSQL_PUB}$" '$5 ~ p {print}' || true
-    occupied=1
-  fi
-  if port_is_listening "$REDIS_PUB"; then
-    echo "错误：ChatBI Redis 映射端口 ${REDIS_PUB}（CHATBI_REDIS_PUBLISH_PORT）已被占用，请修改 .env。"
-    ss -tuln -H 2>/dev/null | awk -v p=":${REDIS_PUB}$" '$5 ~ p {print}' || true
-    occupied=1
-  fi
   if [[ "$occupied" -ne 0 ]]; then
-    echo "已中止启动。若确认无冲突可执行：SKIP_PORT_CHECK=1 ./up.sh"
+    echo "已中止启动。若确认无冲突：SKIP_PORT_CHECK=1 ./up.sh"
     exit 1
   fi
 fi
 
 if [[ -z "${COMPOSE_PROJECT_NAME:-}" ]]; then
-  echo "提示：建议在 .env 中设置 COMPOSE_PROJECT_NAME（例如 chatbi_case_prod），以便与其它 Docker 项目网络/卷隔离。"
+  echo "提示：建议在 .env 中设置 COMPOSE_PROJECT_NAME，以便与其它 Docker 项目隔离。"
 fi
 
 docker compose up -d --build
 
 echo ""
-echo "已启动。HTTP  访问宿主机端口：${HTTP_PORT}"
-echo "         HTTPS 访问宿主机端口：${HTTPS_PORT}（镜像内自签名证书时浏览器需信任）"
-echo "         （本机调试）MySQL 127.0.0.1:${MYSQL_PUB}  Redis 127.0.0.1:${REDIS_PUB}"
+echo "已启动。HTTP  http://<ECS IP>:${HTTP_PORT}"
+echo "       HTTPS https://<ECS IP>:${HTTPS_PORT}"
+echo "MySQL/Redis 仅在 Docker 网络内（服务名 mysql、redis），未绑定宿主机端口。"

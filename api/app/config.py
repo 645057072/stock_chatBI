@@ -3,7 +3,7 @@
 
 from functools import lru_cache
 
-from pydantic import AliasChoices, Field
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -15,11 +15,26 @@ class Settings(BaseSettings):
         default="127.0.0.1",
         validation_alias=AliasChoices("CHATBI_MYSQL_HOST", "MYSQL_HOST"),
     )
+
+    @field_validator("mysql_host", mode="before")
+    @classmethod
+    def _strip_mysql_host(cls, v):
+        # Windows 编辑的 .env 易产生 \r 或 BOM，会导致 Docker 内 DNS 无法解析主机名
+        if isinstance(v, str):
+            return v.strip().strip("\ufeff").strip()
+        return v
     # 容器编排见 compose 默认 3309（避开宿主机常用 3306）；本机直连未设环境变量时与项目默认一致
     mysql_port: int = Field(
         default=3309,
         validation_alias=AliasChoices("CHATBI_MYSQL_PORT", "MYSQL_PORT"),
     )
+
+    @field_validator("mysql_port", mode="before")
+    @classmethod
+    def _strip_mysql_port(cls, v):
+        if isinstance(v, str):
+            return v.strip().strip("\r\n").strip("\ufeff").strip()
+        return v
     mysql_user: str = Field(default="root", validation_alias=AliasChoices("MYSQL_USER"))
     mysql_password: str = Field(
         default="AAAAa@321",
@@ -34,6 +49,27 @@ class Settings(BaseSettings):
         default="redis://127.0.0.1:6381/0",
         validation_alias=AliasChoices("REDIS_URL"),
     )
+
+    @field_validator("mysql_user", "mysql_database", mode="before")
+    @classmethod
+    def _strip_env_crlf(cls, v):
+        if isinstance(v, str):
+            return v.strip("\r\n").strip("\ufeff").strip()
+        return v
+
+    @field_validator("mysql_password", mode="before")
+    @classmethod
+    def _strip_pw_crlf(cls, v):
+        if isinstance(v, str):
+            return v.strip("\r\n").strip("\ufeff")
+        return v
+
+    @field_validator("redis_url", mode="before")
+    @classmethod
+    def _strip_redis_url(cls, v):
+        if isinstance(v, str):
+            return v.strip().strip("\ufeff").strip()
+        return v
 
     # 会话 Cookie
     session_cookie_name: str = "chatbi_session"

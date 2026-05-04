@@ -70,8 +70,8 @@ services:
       MYSQL_HOST: ${CHATBI_MYSQL_HOST:-mysql}
       MYSQL_PORT: ${CHATBI_MYSQL_PORT:-3309}
       MYSQL_USER: ${MYSQL_USER:-root}
-      # 内置 MySQL 时请在 .env 中设置 MYSQL_PASSWORD（与 MYSQL_ROOT_PASSWORD 一致）；连接 RDS 时填写 RDS 账号密码
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-devroot}
+      # 未设置 MYSQL_PASSWORD 时沿用 MYSQL_ROOT_PASSWORD，避免仅配置了 root 密码导致 API 仍用 devroot 连库而注册 500
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-${MYSQL_ROOT_PASSWORD:-devroot}}
       MYSQL_DATABASE: ${MYSQL_DATABASE:-chat_bi_case}
       REDIS_URL: ${REDIS_URL:-redis://redis:6381/0}
       STOCK_BOT_IMAGE_DIR: /app/image_show

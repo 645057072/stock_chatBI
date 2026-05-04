@@ -20,11 +20,20 @@ class Settings(BaseSettings):
         default=3309,
         validation_alias=AliasChoices("CHATBI_MYSQL_PORT", "MYSQL_PORT"),
     )
-    mysql_user: str = "root"
-    mysql_password: str = "AAAAa@321"
-    mysql_database: str = "chat_bi_case"
+    mysql_user: str = Field(default="root", validation_alias=AliasChoices("MYSQL_USER"))
+    mysql_password: str = Field(
+        default="AAAAa@321",
+        validation_alias=AliasChoices("MYSQL_PASSWORD"),
+    )
+    mysql_database: str = Field(
+        default="chat_bi_case",
+        validation_alias=AliasChoices("MYSQL_DATABASE"),
+    )
 
-    redis_url: str = "redis://127.0.0.1:6381/0"
+    redis_url: str = Field(
+        default="redis://127.0.0.1:6381/0",
+        validation_alias=AliasChoices("REDIS_URL"),
+    )
 
     # 会话 Cookie
     session_cookie_name: str = "chatbi_session"

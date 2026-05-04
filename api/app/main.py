@@ -26,9 +26,37 @@ from app.stock_bridge import rewrite_markdown_images, run_agent_turn
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    import logging
     import os
 
     os.makedirs(image_show_dir(), exist_ok=True)
+    log = logging.getLogger("uvicorn.error")
+    s = get_settings()
+    try:
+        with get_engine().connect() as conn:
+            conn.execute(text("SELECT 1"))
+            tbl = conn.execute(
+                text(
+                    "SELECT COUNT(*) FROM information_schema.tables "
+                    "WHERE table_schema = :db AND table_name = 'app_users'"
+                ),
+                {"db": s.mysql_database},
+            ).scalar_one()
+            if tbl == 0:
+                raise RuntimeError(
+                    "数据库无 app_users 表，请确认 MySQL 首次初始化已挂载执行 deploy/init-app.sql；"
+                    "若数据可丢弃可执行 docker compose down -v 后重新 up。"
+                )
+    except Exception as exc:
+        log.error(
+            "MySQL 启动校验失败（密码与数据卷不一致、未建表等都会导致注册 500）：host=%s port=%s database=%s user=%s，错误=%s",
+            s.mysql_host,
+            s.mysql_port,
+            s.mysql_database,
+            s.mysql_user,
+            exc,
+        )
+        raise
     yield
 
 

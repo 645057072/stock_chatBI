@@ -32,8 +32,9 @@ wait_tcp() {
   exit 1
 }
 
-wait_tcp "MySQL" "$MYSQL_H" "$MYSQL_P" 60
-wait_tcp "Redis" "$REDIS_H" "$REDIS_P" 30
+# MySQL 首次建卷 + 执行 initdb SQL 在 ECS 慢盘上常超过 2 分钟，次数过少会导致 api 先于库就绪而退出
+wait_tcp "MySQL" "$MYSQL_H" "$MYSQL_P" 180
+wait_tcp "Redis" "$REDIS_H" "$REDIS_P" 45
 
 # 部分 ECS 上 Docker 内嵌 DNS 在主线程可用，在 uvicorn run_in_threadpool 的工作线程里 getaddrinfo 间歇失败。
 # 等待 TCP 已成功说明当时可解析，此处把「主机名 -> IPv4」写入 /etc/hosts（nsswitch 通常 files 优先），消除注册/登录 500。

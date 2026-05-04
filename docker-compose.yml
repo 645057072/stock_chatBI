@@ -40,8 +40,9 @@ services:
       test: ["CMD-SHELL", "MYSQL_PWD=$$MYSQL_ROOT_PASSWORD mysqladmin ping -h 127.0.0.1 -P3309 -uroot || exit 1"]
       interval: 10s
       timeout: 5s
-      retries: 15
-      start_period: 120s
+      retries: 20
+      # 首次初始化 InnoDB + schema/init sql 可能较慢
+      start_period: 300s
 
   redis:
     image: redis:7-alpine
@@ -99,8 +100,9 @@ services:
         ]
       interval: 15s
       timeout: 10s
-      retries: 8
-      start_period: 180s
+      retries: 10
+      # 覆盖 entrypoint 最长等待 MySQL（180×2s）+ lifespan 重试（45×2s）+ 余量
+      start_period: 540s
 
   nginx:
     build:

@@ -21,6 +21,6 @@ docker compose ps
 echo ""
 echo "初始化说明："
 echo "  - MySQL：首次创建数据卷时会自动执行 schema.sql、deploy/init-app.sql。"
-echo "  - 中间件：MySQL/Redis 默认仅容器互通，不占宿主机 13306/16379，避免与其它应用冲突。"
+echo "  - 中间件：MySQL/Redis 默认仅容器互通（容器内 3309/6381），不占宿主机 3306/6379，避免与其它应用冲突。"
 echo "  - 连接：可在 .env 中修改 CHATBI_MYSQL_*、REDIS_URL（连接阿里云 RDS/Redis 时需自行删掉 compose 内 mysql/redis 服务或改用外部编排）。"
 echo "  - 若 MySQL 曾初始化失败，数据卷可能损坏，需清空后重来：docker compose down -v && ./ecs-first-up.sh"

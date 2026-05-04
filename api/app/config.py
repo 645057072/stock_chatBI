@@ -15,16 +15,16 @@ class Settings(BaseSettings):
         default="127.0.0.1",
         validation_alias=AliasChoices("CHATBI_MYSQL_HOST", "MYSQL_HOST"),
     )
-    # 容器编排见 compose 默认 13306；本机直连 MySQL 未设环境变量时仍为 3306
+    # 容器编排见 compose 默认 3309（避开宿主机常用 3306）；本机直连未设环境变量时与项目默认一致
     mysql_port: int = Field(
-        default=3306,
+        default=3309,
         validation_alias=AliasChoices("CHATBI_MYSQL_PORT", "MYSQL_PORT"),
     )
     mysql_user: str = "root"
     mysql_password: str = "AAAAa@321"
     mysql_database: str = "chat_bi_case"
 
-    redis_url: str = "redis://127.0.0.1:6379/0"
+    redis_url: str = "redis://127.0.0.1:6381/0"
 
     # 会话 Cookie
     session_cookie_name: str = "chatbi_session"

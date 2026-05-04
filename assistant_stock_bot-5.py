@@ -11,7 +11,7 @@
 - 环境变量 DASHSCOPE_API_KEY（DashScope）
 - statsmodels（ARIMA）
 - prophet（Prophet 周期性分析）
-- MySQL: 127.0.0.1:3306, root / AAAAa@321, 数据库 chat_bi_case
+- MySQL: 127.0.0.1:3309, root / AAAAa@321, 数据库 chat_bi_case
 """
 
 from __future__ import annotations
@@ -53,9 +53,9 @@ tushare_token = os.getenv("TUSHARE_TOKEN", "")
 if tushare_token:
     ts.set_token(tushare_token)
 
-# MySQL 连接（支持环境变量，便于 Docker / 部署；CHATBI_MYSQL_HOST 优先，与 FastAPI 编排一致）
+# MySQL 连接（支持环境变量，便于 Docker / 部署；CHATBI_MYSQL_HOST / CHATBI_MYSQL_PORT 优先，与 FastAPI 编排一致）
 MYSQL_HOST = os.getenv("CHATBI_MYSQL_HOST") or os.getenv("MYSQL_HOST", "127.0.0.1")
-MYSQL_PORT = int(os.getenv("MYSQL_PORT", "3306"))
+MYSQL_PORT = int(os.getenv("CHATBI_MYSQL_PORT") or os.getenv("MYSQL_PORT", "3309"))
 MYSQL_USER = os.getenv("MYSQL_USER", "root")
 MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD", "AAAAa@321")
 MYSQL_DATABASE = os.getenv("MYSQL_DATABASE", "chat_bi_case")

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ChatBI：Linux 下一键启动（仅检测 Nginx 对外端口，避免与 ECS 其它 Web 冲突）
-# MySQL/Redis 默认不映射宿主机端口，无需检测 13306/16379
+# MySQL/Redis 默认不映射宿主机端口，无需检测 3309/6381
 # 用法：chmod +x up.sh && ./up.sh
 # 跳过检测：SKIP_PORT_CHECK=1 ./up.sh
 

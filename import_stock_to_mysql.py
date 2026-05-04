@@ -20,7 +20,7 @@ from fetch_stock_history import START_DATE, STOCKS
 
 # MySQL 连接（密码含特殊字符时用 connect 参数，避免 URL 转义问题）
 MYSQL_HOST = "127.0.0.1"
-MYSQL_PORT = 3306
+MYSQL_PORT = 3309
 MYSQL_USER = "root"
 MYSQL_PASSWORD = "AAAAa@321"
 MYSQL_DATABASE = "chat_bi_case"

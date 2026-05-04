@@ -59,6 +59,9 @@ services:
     build:
       context: .
       dockerfile: api/Dockerfile
+      args:
+        PIP_INDEX_URL: "${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}"
+        PIP_TRUSTED_HOST: "${PIP_TRUSTED_HOST:-pypi.tuna.tsinghua.edu.cn}"
     env_file:
       - .env
     environment:
@@ -99,6 +102,8 @@ services:
     build:
       context: .
       dockerfile: deploy/nginx.Dockerfile
+      args:
+        NPM_REGISTRY: "${NPM_REGISTRY:-https://registry.npmmirror.com}"
     ports:
       - "${CHATBI_HTTP_PORT:-18080}:80"
       - "${CHATBI_HTTPS_PORT:-18443}:443"

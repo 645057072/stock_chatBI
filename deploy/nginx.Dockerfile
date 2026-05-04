@@ -1,6 +1,9 @@
 # 构建前端 + 生成开发用自签名证书 + Nginx
 FROM node:20-alpine AS webbuild
 WORKDIR /web
+# 国内构建默认 npmmirror，避免 registry.npmjs.org 超时（可通过 NPM_REGISTRY 构建参数改为官方源）
+ARG NPM_REGISTRY=https://registry.npmmirror.com
+RUN npm config set registry "${NPM_REGISTRY}"
 COPY web/package.json ./
 RUN npm install
 COPY web/ ./

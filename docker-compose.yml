@@ -92,6 +92,9 @@ services:
         condition: service_healthy
     volumes:
       - chatbi_images:/app/image_show
+    # 显式指定嵌入式 DNS，减轻个别主机 resolv.conf 异常导致应用进程解析失败
+    dns:
+      - 127.0.0.11
     networks:
       - chatbi_internal
     healthcheck:

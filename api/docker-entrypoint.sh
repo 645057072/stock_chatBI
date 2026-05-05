@@ -36,6 +36,36 @@ wait_tcp() {
 wait_tcp "MySQL" "$MYSQL_H" "$MYSQL_P" 180
 wait_tcp "Redis" "$REDIS_H" "$REDIS_P" 45
 
-# 不向 /etc/hosts 写入容器 IP：MySQL/Redis 重启后网桥地址会变，固化条目会导致 Errno 113「No route to host」。依赖 Docker 内置 DNS + db.py 每次新建连接。
+# 部分 ECS 上：shell 子进程里 socket.connect(主机名) 成功，但 uvicorn 主进程里 getaddrinfo(同一主机名) 持续失败。
+# wait_tcp 已证明此刻可解析，这里取出 IPv4 写入环境变量，让 PyMySQL/redis 直连 IP，避开主进程 DNS 差异。
+# MySQL/Redis 重建容器后 IP 会变，需一并重启 api（docker compose restart api）。
+MYSQL_IPV4=$(python -c "import socket; print(socket.getaddrinfo('$MYSQL_H', int('$MYSQL_P'), socket.AF_INET, socket.SOCK_STREAM)[0][4][0])" 2>/dev/null) || MYSQL_IPV4=""
+if [ -n "$MYSQL_IPV4" ]; then
+  export CHATBI_MYSQL_HOST="$MYSQL_IPV4"
+  export MYSQL_HOST="$MYSQL_IPV4"
+  echo "[entrypoint] MySQL 主进程改用 IPv4 ${MYSQL_IPV4}（原主机名 ${MYSQL_H}）"
+fi
+
+REDIS_IPV4=$(python -c "import socket; print(socket.getaddrinfo('$REDIS_H', int('$REDIS_P'), socket.AF_INET, socket.SOCK_STREAM)[0][4][0])" 2>/dev/null) || REDIS_IPV4=""
+if [ -n "$REDIS_IPV4" ]; then
+  export REDIS_IPV4
+  export REDIS_P
+  _redis_new=$(python -c 'import os, urllib.parse as u
+url = os.environ.get("REDIS_URL", "redis://redis:6381/0")
+ip = os.environ["REDIS_IPV4"]
+p = u.urlparse(url)
+netloc = p.netloc or ""
+if "@" in netloc:
+    print(url)
+else:
+    port = p.port if p.port is not None else int(os.environ["REDIS_P"])
+    path = p.path if p.path else "/0"
+    print(f"{p.scheme}://{ip}:{port}{path}")
+' 2>/dev/null) || _redis_new=""
+  if [ -n "$_redis_new" ]; then
+    export REDIS_URL="$_redis_new"
+    echo "[entrypoint] Redis 主进程改用 IPv4（原主机名 ${REDIS_H}）"
+  fi
+fi
 
 exec "$@"

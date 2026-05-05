@@ -4,6 +4,7 @@
 import os
 import re
 import socket
+import time
 
 import pymysql
 from sqlalchemy import create_engine
@@ -18,8 +19,38 @@ _engine: Engine | None = None
 _IPV4 = re.compile(r"^\d{1,3}(\.\d{1,3}){3}$")
 
 
+def _mysql_dns_transient(msg: str) -> bool:
+    """嵌入式 DNS（127.0.0.11）瞬时失败：含 EAI_AGAIN(-3)、NOTFOUND(-2) 等。"""
+    if not msg:
+        return False
+    markers = (
+        "Name or service not known",
+        "Temporary failure in name resolution",
+        "[Errno -3]",
+        "[Errno -2]",
+    )
+    return any(m in msg for m in markers)
+
+
+def _getaddrinfo_ipv4_retry(host: str, port: int, attempts: int = 6):
+    """解析 IPv4，嵌入 DNS 抖动时短暂重试。"""
+    last: OSError | None = None
+    for i in range(attempts):
+        try:
+            infos = socket.getaddrinfo(
+                host, port, socket.AF_INET, socket.SOCK_STREAM
+            )
+            return infos[0][4][0]
+        except OSError as ex:
+            last = ex
+            if i + 1 < attempts:
+                time.sleep(0.25)
+    assert last is not None
+    raise last
+
+
 def _mysql_connection():
-    """每次新建 TCP；针对 Docker ECS 上两类错误做一次性互补重试（A/B）。"""
+    """每次新建 TCP；Docker DNS 瞬时失败重试 + A/B 互补回退。"""
     s = get_settings()
     port = int(s.mysql_port)
     kw = dict(
@@ -34,45 +65,53 @@ def _mysql_connection():
     # 仅内置 Compose 时在环境中设为 mysql；外置 RDS 勿配置此项，避免误连容器服务名
     dns_name = (os.environ.get("CHATBI_MYSQL_DNS_NAME") or "").strip()
 
-    try:
-        return pymysql.connect(host=host, **kw)
-    except pymysql.err.OperationalError as e:
-        if e.args[0] != 2003:
-            raise
-        msg = str(e.args[1]) if len(e.args) > 1 else ""
+    last_exc: pymysql.err.OperationalError | None = None
+    for attempt in range(8):
+        try:
+            return pymysql.connect(host=host, **kw)
+        except pymysql.err.OperationalError as e:
+            if e.args[0] != 2003:
+                raise
+            msg_e = str(e.args[1]) if len(e.args) > 1 else ""
+            last_exc = e
+            if attempt < 7 and _mysql_dns_transient(msg_e):
+                time.sleep(0.25)
+                continue
+            break
 
-        # B：配置为 IPv4 时出现 No route to host（常见于错误固化的网桥 IP）→ 改连 Compose 服务名
-        if (
-            dns_name
-            and _IPV4.match(host)
-            and "No route to host" in msg
-            and dns_name != host
-        ):
-            return pymysql.connect(host=dns_name, **kw)
+    assert last_exc is not None
+    e = last_exc
+    msg = str(e.args[1]) if len(e.args) > 1 else ""
 
-        # A：主机名无法解析 → 先试服务名再试 IPv4（依赖 dns_name，RDS 场景不配置）
-        if dns_name and "Name or service not known" in msg:
-            if dns_name != host:
-                try:
-                    return pymysql.connect(host=dns_name, **kw)
-                except pymysql.err.OperationalError as e2:
-                    if e2.args[0] != 2003:
-                        raise
-                    msg2 = str(e2.args[1]) if len(e2.args) > 1 else ""
-                    if "Name or service not known" not in msg2:
-                        raise
+    # B：配置为 IPv4 时出现 No route to host（常见于错误固化的网桥 IP）→ 改连 Compose 服务名
+    if (
+        dns_name
+        and _IPV4.match(host)
+        and "No route to host" in msg
+        and dns_name != host
+    ):
+        return pymysql.connect(host=dns_name, **kw)
+
+    # A：解析失败（含瞬时 EAI_AGAIN）→ 先试服务名再试 IPv4
+    if dns_name and _mysql_dns_transient(msg):
+        if dns_name != host:
             try:
-                infos = socket.getaddrinfo(
-                    dns_name, port, socket.AF_INET, socket.SOCK_STREAM
-                )
-                ip = infos[0][4][0]
-            except OSError:
-                raise e
-            if ip == host:
-                raise e
-            return pymysql.connect(host=ip, **kw)
+                return pymysql.connect(host=dns_name, **kw)
+            except pymysql.err.OperationalError as e2:
+                if e2.args[0] != 2003:
+                    raise
+                msg2 = str(e2.args[1]) if len(e2.args) > 1 else ""
+                if not _mysql_dns_transient(msg2):
+                    raise
+        try:
+            ip = _getaddrinfo_ipv4_retry(dns_name, port)
+        except OSError:
+            raise e
+        if ip == host:
+            raise e
+        return pymysql.connect(host=ip, **kw)
 
-        raise
+    raise last_exc
 
 
 def get_engine() -> Engine:

@@ -32,6 +32,15 @@ def _mysql_dns_transient(msg: str) -> bool:
     return any(m in msg for m in markers)
 
 
+def _mysql_connect_retryable(msg: str) -> bool:
+    """MySQL 进程重启或 DNS 抖动时，同一主机/port 可稍后重试。"""
+    if not msg:
+        return False
+    if _mysql_dns_transient(msg):
+        return True
+    return "Connection refused" in msg or "[Errno 111]" in msg
+
+
 def _getaddrinfo_ipv4_retry(host: str, port: int, attempts: int = 6):
     """解析 IPv4，嵌入 DNS 抖动时短暂重试。"""
     last: OSError | None = None
@@ -65,8 +74,11 @@ def _mysql_connection():
     # 仅内置 Compose 时在环境中设为 mysql；外置 RDS 勿配置此项，避免误连容器服务名
     dns_name = (os.environ.get("CHATBI_MYSQL_DNS_NAME") or "").strip()
 
+    # MySQL 容器 OOM/崩溃重启时会出现 Connection refused，拉长窗口优于单次失败
+    max_attempts = 40
+    sleep_s = 0.5
     last_exc: pymysql.err.OperationalError | None = None
-    for attempt in range(8):
+    for attempt in range(max_attempts):
         try:
             return pymysql.connect(host=host, **kw)
         except pymysql.err.OperationalError as e:
@@ -74,8 +86,8 @@ def _mysql_connection():
                 raise
             msg_e = str(e.args[1]) if len(e.args) > 1 else ""
             last_exc = e
-            if attempt < 7 and _mysql_dns_transient(msg_e):
-                time.sleep(0.25)
+            if attempt < max_attempts - 1 and _mysql_connect_retryable(msg_e):
+                time.sleep(sleep_s)
                 continue
             break
 

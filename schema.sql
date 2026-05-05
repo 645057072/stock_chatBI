@@ -25,3 +25,13 @@ CREATE TABLE IF NOT EXISTS `stock_daily` (
   UNIQUE KEY `uk_ts_code_trade_date` (`ts_code`, `trade_date`),
   KEY `idx_trade_date` (`trade_date`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='A股日线行情';
+
+-- 与 deploy/init-app.sql 一致；initdb 仅首次执行，此处保证仅挂载 01 时也有用户表定义
+CREATE TABLE IF NOT EXISTS `app_users` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '用户主键',
+  `username` VARCHAR(64) NOT NULL COMMENT '登录名',
+  `password_hash` VARCHAR(255) NOT NULL COMMENT '密码哈希',
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '注册时间',
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_username` (`username`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Web 注册用户';

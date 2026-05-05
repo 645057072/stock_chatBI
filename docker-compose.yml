@@ -24,7 +24,9 @@ services:
       - --character-set-server=utf8mb4
       - --collation-server=utf8mb4_unicode_ci
       - --innodb-use-native-aio=0
-      - --innodb-buffer-pool-size=128M
+      # 低配 ECS 上减小缓冲池、关闭 performance_schema，降低 OOM 导致 mysqld 反复重启（进而 api 报 Connection refused）
+      - --innodb-buffer-pool-size=64M
+      - --performance-schema=OFF
       - --max-allowed-packet=256M
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-devroot}

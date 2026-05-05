@@ -18,6 +18,7 @@ from starlette.concurrency import run_in_threadpool
 from app.auth_util import hash_password, verify_password
 from app.config import get_settings
 from app.db import get_engine
+from app.db_schema import APP_USERS_CREATE_SQL
 from app.rate_limit import allow
 from app.redis_util import get_redis
 from app.paths import image_show_dir
@@ -37,7 +38,7 @@ async def lifespan(app: FastAPI):
     last_exc: Exception | None = None
     for attempt in range(45):
         try:
-            with get_engine().connect() as conn:
+            with get_engine().begin() as conn:
                 conn.execute(text("SELECT 1"))
                 tbl = conn.execute(
                     text(
@@ -47,10 +48,10 @@ async def lifespan(app: FastAPI):
                     {"db": s.mysql_database},
                 ).scalar_one()
                 if tbl == 0:
-                    raise RuntimeError(
-                        "数据库无 app_users 表，请确认 MySQL 首次初始化已挂载执行 deploy/init-app.sql；"
-                        "若数据可丢弃可执行 docker compose down -v 后重新 up。"
+                    log.warning(
+                        "未检测到 app_users 表，执行 CREATE TABLE IF NOT EXISTS（与 deploy/init-app.sql 一致）"
                     )
+                    conn.execute(text(APP_USERS_CREATE_SQL))
             break
         except Exception as exc:
             last_exc = exc

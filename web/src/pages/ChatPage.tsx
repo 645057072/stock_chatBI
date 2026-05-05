@@ -102,6 +102,7 @@ export default function ChatPage() {
         </div>
       </aside>
 
+      <div className={styles.centerWrap}>
       <main className={styles.main}>
         <header className={styles.header}>
           <span className={styles.headerTitle}>股票查询对话</span>
@@ -155,6 +156,41 @@ export default function ChatPage() {
           <p className={styles.disclaimer}>内容由 AI 生成，请仔细甄别</p>
         </footer>
       </main>
+
+      <aside className={styles.capPanel} aria-label="系统服务能力">
+        <div className={styles.capTitle}>服务能力</div>
+        <ul className={styles.capList}>
+          <li>
+            <strong>本地行情库</strong>
+            <span>MySQL「stock_daily」存储 A 股日线；助手优先查库作答。</span>
+          </li>
+          <li>
+            <strong>联网补数</strong>
+            <span>库中无数据时，通过 Tushare 拉取日线并写入数据库（需在服务端配置 TUSHARE_TOKEN）。</span>
+          </li>
+          <li>
+            <strong>SQL 与图表</strong>
+            <span>自然语言转 SQL、查询结果表格与自动走势图。</span>
+          </li>
+          <li>
+            <strong>ARIMA 预测</strong>
+            <span>基于近一年收盘价预测未来若干交易日（工具：arima_stock）。</span>
+          </li>
+          <li>
+            <strong>布林带</strong>
+            <span>20 日、2σ 超买超卖触点检测（工具：boll_detection）。</span>
+          </li>
+          <li>
+            <strong>Prophet</strong>
+            <span>趋势与季节性分解可视化（工具：prophet_analysis）。</span>
+          </li>
+          <li>
+            <strong>大模型</strong>
+            <span>通义千问编排工具调用；API Key：DASHSCOPE_API_KEY。</span>
+          </li>
+        </ul>
+      </aside>
+      </div>
     </div>
   );
 }

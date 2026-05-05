@@ -1,7 +1,9 @@
 FROM python:3.12-slim-bookworm
 
+# libsndfile1：Python soundfile 扩展依赖的系统库（Bookworm 包名）
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential gcc g++ \
+    libsndfile1 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

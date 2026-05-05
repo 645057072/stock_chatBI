@@ -94,8 +94,9 @@ CREATE TABLE stock_daily (
 6) 当用户要求“预测未来股价 / ARIMA / 未来 n 天”等时，必须调用 arima_stock 工具：参数 ts_code（必填）、n（预测交易日数量，必填）。不要手写预测数值。
 7) 当用户要求“布林带 / 超买超卖 / BOLL”等时，必须调用 boll_detection 工具：ts_code（必填）；start_date、end_date（可选，YYYY-MM-DD，默认近一年至今天）。**工具返回后必须原样粘贴全部内容（含「触点日期列表」行与表格），禁止自行改写、概括或另写一套日期。**
 8) 当用户要求“Prophet / 周期性分析 / trend weekly yearly”等时，必须调用 prophet_analysis：ts_code（必填）；start_date、end_date（可选，YYYY-MM-DD，默认近一年）。禁止手写趋势与季节性结论。
+9) 当 exc_sql 返回「查询结果为空」且涉及具体股票（含 ts_code 或可映射到 ts_code）时，或用户明确要求从网络同步/下载/更新行情时，必须先调用 sync_stock_daily：ts_code（必填，如 600519.SH）；start_date、end_date（可选，YYYY-MM-DD，默认约近两年至今）。成功写入后再用 exc_sql 复查。**未配置 TUSHARE_TOKEN 时须如实说明无法拉取，禁止编造行情。**
 
-你需要根据用户问题生成 SQL（MySQL 方言）并调用 exc_sql 工具执行，返回查询结果；预测类问题调用 arima_stock；布林带检测调用 boll_detection；周期性分析调用 prophet_analysis。
+你需要根据用户问题生成 SQL（MySQL 方言）并调用 exc_sql 工具执行，返回查询结果；预测类问题调用 arima_stock；布林带检测调用 boll_detection；周期性分析调用 prophet_analysis；**本地无数据时先 sync_stock_daily 再查库**。
 
 常用查询示例（按需选择）：
 - 某只股票某段时间收盘价走势：
@@ -184,6 +185,28 @@ functions_desc = [
                 "end_date": {
                     "type": "string",
                     "description": "分析结束日期 YYYY-MM-DD（可选，默认到最近交易日）",
+                },
+            },
+            "required": ["ts_code"],
+        },
+    },
+    {
+        "name": "sync_stock_daily",
+        "description": "从 Tushare 拉取指定证券日线写入 MySQL stock_daily，用于库中缺失时的补数",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "ts_code": {
+                    "type": "string",
+                    "description": "证券代码，如 600519.SH（必填）",
+                },
+                "start_date": {
+                    "type": "string",
+                    "description": "开始日期 YYYY-MM-DD（可选，默认结束日期往前约两年）",
+                },
+                "end_date": {
+                    "type": "string",
+                    "description": "结束日期 YYYY-MM-DD（可选，默认今天）",
                 },
             },
             "required": ["ts_code"],
@@ -340,6 +363,184 @@ def _fetch_latest_quote_by_ts_code(ts_code: str, lookback_days: int = 20) -> Opt
         return None
 
 
+def _invalidate_stock_name_caches() -> None:
+    """写入 stock_daily 后清空映射缓存，避免助手仍用旧映射。"""
+    global _ts_code_name_cache, _stock_name_to_ts_codes_cache
+    _ts_code_name_cache = {}
+    _stock_name_to_ts_codes_cache = {}
+
+
+def _parse_opt_date_yyyy_mm_dd(raw, default: date) -> date:
+    """解析 YYYY-MM-DD；空串则用 default。"""
+    if raw is None:
+        return default
+    s = str(raw).strip()
+    if not s:
+        return default
+    return date.fromisoformat(s[:10])
+
+
+def _fetch_stock_display_name(pro, ts_code: str) -> str:
+    """从 stock_basic 取证券简称，失败则用代码前缀兜底（最长 32 字符）。"""
+    try:
+        b = pro.stock_basic(ts_code=ts_code, fields="ts_code,name")
+        if b is not None and not b.empty and "name" in b.columns:
+            name = str(b.iloc[0]["name"]).strip()
+            if name:
+                return name[:32]
+    except Exception:
+        pass
+    return ts_code.split(".")[0][:32]
+
+
+def _upsert_stock_daily_from_tushare(ts_code: str, start_d: date, end_d: date) -> tuple[int, str]:
+    """
+    调用 Tushare daily，写入 stock_daily（ON DUPLICATE KEY UPDATE）。
+    返回 (受影响行数估算, 证券简称)。
+    """
+    if not tushare_token:
+        raise RuntimeError("未配置 TUSHARE_TOKEN")
+    pro = ts.pro_api()
+    stock_name = _fetch_stock_display_name(pro, ts_code)
+    df = pro.daily(
+        ts_code=ts_code,
+        start_date=start_d.strftime("%Y%m%d"),
+        end_date=end_d.strftime("%Y%m%d"),
+    )
+    if df is None or df.empty:
+        return 0, stock_name
+
+    df = df.copy()
+    df["trade_date"] = pd.to_datetime(df["trade_date"], format="%Y%m%d").dt.date
+    rename_map = {
+        "open": "open_price",
+        "high": "high_price",
+        "low": "low_price",
+        "close": "close_price",
+        "pre_close": "pre_close",
+        "change": "price_change",
+        "pct_chg": "pct_chg",
+        "vol": "vol",
+        "amount": "amount",
+    }
+    for old, new in rename_map.items():
+        if old in df.columns and new not in df.columns:
+            df.rename(columns={old: new}, inplace=True)
+
+    sql = text(
+        """
+        INSERT INTO stock_daily (
+          stock_name, ts_code, trade_date, open_price, high_price, low_price, close_price,
+          pre_close, price_change, pct_chg, vol, amount
+        ) VALUES (
+          :stock_name, :ts_code, :trade_date, :open_price, :high_price, :low_price, :close_price,
+          :pre_close, :price_change, :pct_chg, :vol, :amount
+        )
+        ON DUPLICATE KEY UPDATE
+          stock_name = VALUES(stock_name),
+          open_price = VALUES(open_price),
+          high_price = VALUES(high_price),
+          low_price = VALUES(low_price),
+          close_price = VALUES(close_price),
+          pre_close = VALUES(pre_close),
+          price_change = VALUES(price_change),
+          pct_chg = VALUES(pct_chg),
+          vol = VALUES(vol),
+          amount = VALUES(amount)
+        """
+    )
+
+    engine = _mysql_engine()
+    n = 0
+    with engine.begin() as conn:
+        for _, row in df.iterrows():
+            conn.execute(
+                sql,
+                {
+                    "stock_name": stock_name,
+                    "ts_code": ts_code,
+                    "trade_date": row["trade_date"],
+                    "open_price": float(row["open_price"]),
+                    "high_price": float(row["high_price"]),
+                    "low_price": float(row["low_price"]),
+                    "close_price": float(row["close_price"]),
+                    "pre_close": float(row["pre_close"]),
+                    "price_change": float(row["price_change"]),
+                    "pct_chg": float(row["pct_chg"]),
+                    "vol": int(float(row["vol"])) if pd.notna(row["vol"]) else 0,
+                    "amount": float(row["amount"]),
+                },
+            )
+            n += 1
+    _invalidate_stock_name_caches()
+    return n, stock_name
+
+
+@register_tool("sync_stock_daily")
+class SyncStockDailyTool(BaseTool):
+    """通过 Tushare 拉取日线并写入本地 MySQL，供库中无数据时使用。"""
+
+    description = (
+        "从 Tushare 拉取指定 ts_code 的日线行情并写入 MySQL 表 stock_daily；"
+        "库中无数据或用户要求同步网络行情时调用"
+    )
+    parameters = [
+        {
+            "name": "ts_code",
+            "type": "string",
+            "description": "证券代码，如 600519.SH",
+            "required": True,
+        },
+        {
+            "name": "start_date",
+            "type": "string",
+            "description": "开始日期 YYYY-MM-DD（可选）",
+            "required": False,
+        },
+        {
+            "name": "end_date",
+            "type": "string",
+            "description": "结束日期 YYYY-MM-DD（可选，默认今天）",
+            "required": False,
+        },
+    ]
+
+    def call(self, params: str, **kwargs) -> str:
+        if isinstance(params, str):
+            args = json.loads(params)
+        else:
+            args = params
+
+        ts_code = str(args.get("ts_code", "")).strip().upper()
+        if not ts_code:
+            return "参数 ts_code 为必填。"
+        if not re.match(r"^\d{6}\.(SH|SZ|BJ)$", ts_code):
+            return "ts_code 格式应为 6 位数字+.SH/.SZ/.BJ，例如 600519.SH。"
+
+        end_d = _parse_opt_date_yyyy_mm_dd(args.get("end_date"), date.today())
+        start_default = end_d - timedelta(days=730)
+        start_d = _parse_opt_date_yyyy_mm_dd(args.get("start_date"), start_default)
+        if start_d > end_d:
+            return "start_date 不能晚于 end_date。"
+
+        try:
+            n, stock_name = _upsert_stock_daily_from_tushare(ts_code, start_d, end_d)
+        except RuntimeError as e:
+            return str(e)
+        except Exception as e:
+            return f"sync_stock_daily 失败：{type(e).__name__}: {e}"
+
+        if n == 0:
+            return (
+                f"未从 Tushare 获取到 {ts_code}（{stock_name}）在 {start_d} ~ {end_d} 的日线；"
+                "请确认代码正确、接口权限与积分是否足够。"
+            )
+        return (
+            f"已从网络同步 **{stock_name}**（`{ts_code}`）日线 **{n}** 条到 `stock_daily`，"
+            f"区间 **{start_d}** ~ **{end_d}**。请继续用 exc_sql 查询验证。"
+        )
+
+
 def _realtime_block_for_codes(ts_codes: list[str]) -> str:
     """为一组证券代码生成实时交易补充 markdown。"""
     if not ts_codes:
@@ -477,7 +678,10 @@ class ExcSQLTool(BaseTool):
             _last_df_dict[session_id] = df
 
         if df is None or df.empty:
-            return "查询结果为空。"
+            return (
+                "查询结果为空。若该证券在库中尚无日线，可先调用 **sync_stock_daily**（需服务端配置 "
+                "**TUSHARE_TOKEN**）从网络拉取并写入 `stock_daily`，再用 exc_sql 复查。"
+            )
 
         # 若结果缺少 stock_name 但包含 ts_code，则自动补全 stock_name 以便展示更完整信息
         cols_lower = {str(c).lower(): c for c in df.columns.tolist()}
@@ -1248,7 +1452,13 @@ def init_agent_service():
         "retry_count": 3,
     }
 
-    function_list: list = ["exc_sql", "arima_stock", "boll_detection", "prophet_analysis"]
+    function_list: list = [
+        "exc_sql",
+        "sync_stock_daily",
+        "arima_stock",
+        "boll_detection",
+        "prophet_analysis",
+    ]
     # 默认关闭 Tavily MCP，避免 WebUI 在插件参数绑定时出现 endpoint 参数不匹配错误。
     # 如需启用，请同时设置：
     #   TAVILY_API_KEY=...
@@ -1271,8 +1481,8 @@ def init_agent_service():
 
     bot = Assistant(
         llm=llm_cfg,
-        name="股票查询助手（ARIMA+布林带+Prophet）",
-        description="基于 MySQL 的历史行情查询、可视化、ARIMA 预测、布林带检测与 Prophet 周期性分析",
+        name="股票查询助手（行情同步+ARIMA+布林带+Prophet）",
+        description="基于 MySQL 的历史行情；库中缺失时可经 Tushare 同步日线；支持查询可视化、ARIMA、布林带、Prophet",
         system_message=system_prompt,
         function_list=function_list,
         # 仅用于补充“如何写 SQL”的偏好，不用于提供任何真实数据

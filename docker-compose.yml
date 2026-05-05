@@ -76,6 +76,8 @@ services:
       # 默认服务名 mysql（与 compose 服务名一致）；第二次 up、部分环境下 container_name 在应用进程内解析失败而 entrypoint 子进程正常
       CHATBI_MYSQL_HOST: "${CHATBI_MYSQL_HOST:-mysql}"
       CHATBI_MYSQL_PORT: "${CHATBI_MYSQL_PORT:-3309}"
+      # 供 db.py 在「固化 IP 113 / 解析失败」时仅回退到 Compose 服务名；外置库部署请删除或留空
+      CHATBI_MYSQL_DNS_NAME: "${CHATBI_MYSQL_DNS_NAME:-mysql}"
       MYSQL_HOST: "${CHATBI_MYSQL_HOST:-mysql}"
       MYSQL_PORT: "${CHATBI_MYSQL_PORT:-3309}"
       MYSQL_USER: ${MYSQL_USER:-root}

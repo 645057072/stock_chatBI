@@ -3,7 +3,7 @@
 执行 schema.sql 中的建库建表（若不存在），从 tushare 拉取与导出 Excel 相同的股票日线数据，
 清空 stock_daily 后全量写入 MySQL。
 
-需环境变量 TUSHARE_TOKEN。数据库连接参数见下方 MYSQL_*（可按需改为环境变量）。
+需环境变量 TUSHARE_TOKEN。数据库连接与 .env 中 MYSQL_* / CHATBI_MYSQL_* 一致。
 """
 from __future__ import annotations
 
@@ -18,12 +18,16 @@ import tushare as ts
 
 from fetch_stock_history import START_DATE, STOCKS
 
-# MySQL 连接（密码含特殊字符时用 connect 参数，避免 URL 转义问题）
-MYSQL_HOST = "127.0.0.1"
-MYSQL_PORT = 3309
-MYSQL_USER = "root"
-MYSQL_PASSWORD = "AAAAa@321"
-MYSQL_DATABASE = "chat_bi_case"
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv()
+except ImportError:
+    pass
+
+from chatbi_mysql_env import stock_mysql_params
+
+MYSQL_HOST, MYSQL_PORT, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DATABASE = stock_mysql_params()
 
 SCHEMA_FILE = Path(__file__).resolve().parent / "schema.sql"
 

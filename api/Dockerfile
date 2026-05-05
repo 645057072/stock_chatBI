@@ -21,6 +21,7 @@ RUN pip install --upgrade pip setuptools wheel \
         -i "${PIP_INDEX_URL}" \
         --trusted-host "${PIP_TRUSTED_HOST}"
 
+COPY chatbi_mysql_env.py /app/
 COPY assistant_stock_bot-5.py /app/
 COPY faq.txt /app/
 COPY api/app /app/app

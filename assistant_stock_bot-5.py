@@ -11,7 +11,7 @@
 - 环境变量 DASHSCOPE_API_KEY（DashScope）
 - statsmodels（ARIMA）
 - prophet（Prophet 周期性分析）
-- MySQL: 127.0.0.1:3309, root / AAAAa@321, 数据库 chat_bi_case
+- MySQL：环境变量 CHATBI_MYSQL_* / MYSQL_*（与 .env、Docker compose 一致）
 """
 
 from __future__ import annotations
@@ -36,7 +36,10 @@ from qwen_agent.tools.base import BaseTool, register_tool
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import URL
 from dotenv import load_dotenv
+
 load_dotenv()
+
+from chatbi_mysql_env import stock_mysql_params
 # 解决中文显示问题
 plt.rcParams["font.sans-serif"] = [
     "SimHei",
@@ -53,12 +56,8 @@ tushare_token = os.getenv("TUSHARE_TOKEN", "")
 if tushare_token:
     ts.set_token(tushare_token)
 
-# MySQL 连接（支持环境变量，便于 Docker / 部署；CHATBI_MYSQL_HOST / CHATBI_MYSQL_PORT 优先，与 FastAPI 编排一致）
-MYSQL_HOST = os.getenv("CHATBI_MYSQL_HOST") or os.getenv("MYSQL_HOST", "127.0.0.1")
-MYSQL_PORT = int(os.getenv("CHATBI_MYSQL_PORT") or os.getenv("MYSQL_PORT", "3309"))
-MYSQL_USER = os.getenv("MYSQL_USER", "root")
-MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD", "AAAAa@321")
-MYSQL_DATABASE = os.getenv("MYSQL_DATABASE", "chat_bi_case")
+# MySQL 连接（与 FastAPI、.env、compose 同源：chatbi_mysql_env.stock_mysql_params）
+MYSQL_HOST, MYSQL_PORT, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DATABASE = stock_mysql_params()
 
 # 输出图片目录（可通过 STOCK_BOT_IMAGE_DIR 指定，例如容器内 /app/image_show）
 IMAGE_DIR = os.getenv(

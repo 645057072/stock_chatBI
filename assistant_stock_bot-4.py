@@ -9,7 +9,7 @@
 依赖：
 - 环境变量 DASHSCOPE_API_KEY（DashScope）
 - statsmodels（ARIMA）
-- MySQL: 127.0.0.1:3306, root / AAAAa@321, 数据库 chat_bi_case
+- MySQL：.env / 环境变量 CHATBI_MYSQL_*、MYSQL_*（默认端口 3309）
 """
 
 from __future__ import annotations
@@ -31,7 +31,10 @@ from qwen_agent.tools.base import BaseTool, register_tool
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import URL
 from dotenv import load_dotenv
+
 load_dotenv()
+
+from chatbi_mysql_env import stock_mysql_params
 # 解决中文显示问题
 plt.rcParams["font.sans-serif"] = [
     "SimHei",
@@ -45,12 +48,8 @@ plt.rcParams["axes.unicode_minus"] = False
 dashscope.api_key = os.getenv("DASHSCOPE_API_KEY", "")
 dashscope.timeout = 30
 
-# MySQL 连接
-MYSQL_HOST = "127.0.0.1"
-MYSQL_PORT = 3306
-MYSQL_USER = "root"
-MYSQL_PASSWORD = "AAAAa@321"
-MYSQL_DATABASE = "chat_bi_case"
+# MySQL 连接（与 .env 一致）
+MYSQL_HOST, MYSQL_PORT, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DATABASE = stock_mysql_params()
 
 # 输出图片目录
 IMAGE_DIR = os.path.join(os.path.dirname(__file__), "image_show")

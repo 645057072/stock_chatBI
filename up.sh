@@ -58,6 +58,10 @@ fi
 docker compose up -d --build
 
 echo ""
+echo "=== nginx（页面与 /api 反代；若未运行则浏览器报「连接被拒绝」）==="
+docker compose ps -a nginx 2>/dev/null || true
+
+echo ""
 echo "已启动。HTTP  http://<ECS IP>:${HTTP_PORT}"
 echo "       HTTPS https://<ECS IP>:${HTTPS_PORT}"
 echo "MySQL/Redis 仅在 Docker 网络内（服务名 mysql、redis），未绑定宿主机端口。"

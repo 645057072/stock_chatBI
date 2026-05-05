@@ -10,7 +10,8 @@ COPY web/ ./
 RUN npm run build
 
 FROM nginx:1.27-alpine
-RUN apk add --no-cache openssl \
+# curl 用于 compose healthcheck；openssl 用于本地自签名 HTTPS
+RUN apk add --no-cache openssl curl \
     && mkdir -p /etc/nginx/certs \
     && openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
         -keyout /etc/nginx/certs/privkey.pem \

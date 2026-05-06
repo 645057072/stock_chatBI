@@ -1,23 +1,18 @@
 .layout {
   display: flex;
+  flex-direction: row;
+  width: 100%;
   min-height: 100vh;
   align-items: stretch;
   background: #1a1a1a;
 }
 
-/* 左 20% | 中 60% | 右 20%（服务能力） */
-.centerWrap {
-  flex: 1;
-  display: flex;
-  flex-direction: row;
-  min-width: 0;
-  align-self: stretch;
-  min-height: 100vh;
-}
+/* 左 20% | 中间自适应占满剩余宽度 | 右 20% 服务能力贴齐视口右缘，避免嵌套 flex 子项 60%+20% 留下缝隙 */
 
 .sidebar {
   flex: 0 0 20%;
   width: 20%;
+  max-width: 20%;
   min-width: 0;
   min-height: 100vh;
   align-self: stretch;
@@ -129,8 +124,7 @@
 }
 
 .main {
-  flex: 0 0 60%;
-  width: 60%;
+  flex: 1 1 0;
   min-width: 0;
   min-height: 100vh;
   display: flex;
@@ -140,6 +134,7 @@
 .capPanel {
   flex: 0 0 20%;
   width: 20%;
+  max-width: 20%;
   min-width: 0;
   min-height: 100vh;
   align-self: stretch;
@@ -291,6 +286,7 @@
   gap: 10px;
   margin-bottom: 16px;
   align-items: flex-start;
+  min-width: 0;
 }
 
 .avatar {
@@ -302,11 +298,18 @@
 }
 
 .bubbleBot {
+  flex: 1 1 0;
+  min-width: 0;
   max-width: 82%;
   padding: 4px 0;
   color: #e6e6e6;
   font-size: 0.95rem;
   line-height: 1.55;
+}
+
+.emptyReply {
+  color: #888;
+  font-size: 0.88rem;
 }
 
 .bubbleBot img {

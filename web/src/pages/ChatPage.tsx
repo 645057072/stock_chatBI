@@ -210,100 +210,99 @@ export default function ChatPage() {
         </div>
       </aside>
 
-      <div className={styles.centerWrap}>
-        <main className={styles.main}>
-          <header className={styles.header}>
-            <span className={styles.headerTitle}>股票查询对话</span>
-          </header>
+      <main className={styles.main}>
+        <header className={styles.header}>
+          <span className={styles.headerTitle}>股票查询对话</span>
+        </header>
 
-          <div className={styles.feed}>
-            {showPromptCache ? (
-              <div className={styles.promptCache}>
-                <p className={styles.promptCacheTitle}>有什么可以帮助你吗？</p>
-                <p className={styles.promptCacheHint}>点击下方示例快速提问（不超过 7 条）</p>
-                <div className={styles.promptChips}>
-                  {QUICK_PROMPTS.map((t, i) => (
-                    <button
-                      key={i}
-                      type="button"
-                      className={styles.promptChip}
-                      disabled={sending}
-                      onClick={() => void onSend(undefined, t)}
-                    >
-                      {t}
-                    </button>
-                  ))}
+        <div className={styles.feed}>
+          {showPromptCache ? (
+            <div className={styles.promptCache}>
+              <p className={styles.promptCacheTitle}>有什么可以帮助你吗？</p>
+              <p className={styles.promptCacheHint}>点击下方示例快速提问（不超过 7 条）</p>
+              <div className={styles.promptChips}>
+                {QUICK_PROMPTS.map((t, i) => (
+                  <button
+                    key={i}
+                    type="button"
+                    className={styles.promptChip}
+                    disabled={sending}
+                    onClick={() => void onSend(undefined, t)}
+                  >
+                    {t}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : null}
+          {rows.length === 0 && !showPromptCache ? (
+            <p className={styles.placeholder}>输入问题开始查询，例如贵州茅台近一年收盘价走势。</p>
+          ) : null}
+          {rows.map((row, i) =>
+            row.role === "user" ? (
+              <div key={i} className={styles.rowUser}>
+                <div className={styles.bubbleUser}>{row.text}</div>
+              </div>
+            ) : (
+              <div key={i} className={styles.rowBot}>
+                <div className={styles.avatar} />
+                <div className={styles.bubbleBot}>
+                  {row.text.trim() ? (
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{row.text}</ReactMarkdown>
+                  ) : (
+                    <span className={styles.emptyReply}>（助手未返回正文，请重试或查看服务端日志）</span>
+                  )}
                 </div>
               </div>
-            ) : null}
-            {rows.length === 0 && !showPromptCache ? (
-              <p className={styles.placeholder}>输入问题开始查询，例如贵州茅台近一年收盘价走势。</p>
-            ) : null}
-            {rows.map((row, i) =>
-              row.role === "user" ? (
-                <div key={i} className={styles.rowUser}>
-                  <div className={styles.bubbleUser}>{row.text}</div>
-                </div>
-              ) : (
-                <div key={i} className={styles.rowBot}>
-                  <div className={styles.avatar} />
-                  <div className={styles.bubbleBot}>
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{row.text}</ReactMarkdown>
-                  </div>
-                </div>
-              )
-            )}
-            {sending ? <div className={styles.thinking}>助手思考中…</div> : null}
-            {err ? <div className={styles.feedErr}>{err}</div> : null}
-            <div ref={bottomRef} />
-          </div>
+            )
+          )}
+          {sending ? <div className={styles.thinking}>助手思考中…</div> : null}
+          {err ? <div className={styles.feedErr}>{err}</div> : null}
+          <div ref={bottomRef} />
+        </div>
 
-          <footer className={styles.footer}>
-            <form
-              className={styles.inputBar}
-              onSubmit={(e) => void onSend(e)}
-            >
-              <button type="button" className={styles.attach} title="附件占位" disabled>
-                +
-              </button>
-              <textarea
-                className={styles.textarea}
-                rows={2}
-                value={input}
-                placeholder="输入股票相关问题…"
-                onChange={(e) => {
-                  const v = e.target.value;
-                  setInput(v);
-                  if (v.trim()) setHideQuickPrompts(true);
-                }}
-                onKeyDown={(e: KeyboardEvent<HTMLTextAreaElement>) => {
-                  if (e.key === "Enter" && !e.shiftKey) {
-                    e.preventDefault();
-                    void onSend(e);
-                  }
-                }}
-              />
-              <button type="submit" className={styles.send} disabled={sending}>
-                发送
-              </button>
-            </form>
-            <p className={styles.disclaimer}>内容由 AI 生成，请仔细甄别</p>
-          </footer>
-        </main>
+        <footer className={styles.footer}>
+          <form className={styles.inputBar} onSubmit={(e) => void onSend(e)}>
+            <button type="button" className={styles.attach} title="附件占位" disabled>
+              +
+            </button>
+            <textarea
+              className={styles.textarea}
+              rows={2}
+              value={input}
+              placeholder="输入股票相关问题…"
+              onChange={(e) => {
+                const v = e.target.value;
+                setInput(v);
+                if (v.trim()) setHideQuickPrompts(true);
+              }}
+              onKeyDown={(e: KeyboardEvent<HTMLTextAreaElement>) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  void onSend(e);
+                }
+              }}
+            />
+            <button type="submit" className={styles.send} disabled={sending}>
+              发送
+            </button>
+          </form>
+          <p className={styles.disclaimer}>内容由 AI 生成，请仔细甄别</p>
+        </footer>
+      </main>
 
-        <aside className={styles.capPanel} aria-label="系统服务能力">
-          <div className={styles.capTitle}>服务能力</div>
-          <ul className={styles.capList}>
-            <li>优先使用已落地的股票日线数据作答，响应更快、结果更稳定。</li>
-            <li>本地缺数据或过旧时自动从外部行情源补齐，再继续回答。</li>
-            <li>用口语描述即可生成数据表格，并配上走势类图表便于阅读。</li>
-            <li>基于历史价格给出短期走向参考，适合辅助观察节奏。</li>
-            <li>从波动区间角度提示阶段性的相对偏高或偏低位置。</li>
-            <li>把长期走势拆成趋势与季节性等成分，并用图直观展示。</li>
-            <li>理解您的问题并调度上述能力，综合生成分析与说明。</li>
-          </ul>
-        </aside>
-      </div>
+      <aside className={styles.capPanel} aria-label="系统服务能力">
+        <div className={styles.capTitle}>服务能力</div>
+        <ul className={styles.capList}>
+          <li>优先使用已落地的股票日线数据作答，响应更快、结果更稳定。</li>
+          <li>本地缺数据或过旧时自动从外部行情源补齐，再继续回答。</li>
+          <li>用口语描述即可生成数据表格，并配上走势类图表便于阅读。</li>
+          <li>基于历史价格给出短期走向参考，适合辅助观察节奏。</li>
+          <li>从波动区间角度提示阶段性的相对偏高或偏低位置。</li>
+          <li>把长期走势拆成趋势与季节性等成分，并用图直观展示。</li>
+          <li>理解您的问题并调度上述能力，综合生成分析与说明。</li>
+        </ul>
+      </aside>
     </div>
   );
 }

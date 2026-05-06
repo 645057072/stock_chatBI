@@ -39,6 +39,24 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+
+def _ensure_api_pkg_path() -> None:
+    """开发与 Docker 下均能 import app.*（如 sql_guard），与 FastAPI 共用校验逻辑。"""
+    import sys
+    from pathlib import Path
+
+    here = Path(__file__).resolve().parent
+    for base in (here, here / "api"):
+        if (base / "app").is_dir():
+            bs = str(base)
+            if bs not in sys.path:
+                sys.path.insert(0, bs)
+            break
+
+
+_ensure_api_pkg_path()
+from app.sql_guard import validate_exc_sql_or_raise
+
 from chatbi_mysql_env import stock_mysql_params
 # 解决中文显示问题
 plt.rcParams["font.sans-serif"] = [
@@ -732,6 +750,10 @@ class ExcSQLTool(BaseTool):
         else:
             args = params
         sql_input = args["sql_input"]
+        try:
+            validate_exc_sql_or_raise(sql_input)
+        except ValueError as ve:
+            return f"SQL 安全检查未通过：{ve}"
 
         session_id = get_session_id(kwargs)
         try:

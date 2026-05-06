@@ -9,7 +9,7 @@ import time
 import pymysql
 from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
-from sqlalchemy.pool import NullPool
+from sqlalchemy.pool import QueuePool
 
 from app.config import get_settings
 
@@ -129,9 +129,14 @@ def _mysql_connection():
 def get_engine() -> Engine:
     global _engine
     if _engine is None:
+        # QueuePool + pre_ping：高并发下复连路与断线检测；不改变 SQL 语义
         _engine = create_engine(
             "mysql+pymysql://",
             creator=_mysql_connection,
-            poolclass=NullPool,
+            poolclass=QueuePool,
+            pool_size=10,
+            max_overflow=20,
+            pool_pre_ping=True,
+            pool_recycle=3600,
         )
     return _engine

@@ -19,10 +19,11 @@ function looksLikeHtmlGateway(text: string): boolean {
   if (t.length < 24) return false;
   if (!/<html\b/i.test(t) && !/<!doctype\s+html/i.test(t)) return false;
   const lower = t.toLowerCase();
-  if (t.includes("502") || t.includes("504")) return true;
+  if (t.includes("500") || t.includes("502") || t.includes("504")) return true;
   if (lower.includes("bad gateway") || lower.includes("gateway timeout") || lower.includes("gateway time-out"))
     return true;
-  if (lower.includes("nginx/") && (t.includes("502") || t.includes("504"))) return true;
+  if (lower.includes("internal server error")) return true;
+  if (lower.includes("nginx/") && (t.includes("500") || t.includes("502") || t.includes("504"))) return true;
   return false;
 }
 

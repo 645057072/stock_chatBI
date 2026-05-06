@@ -15,7 +15,12 @@ def test_nginx_template_has_envsubst_placeholders():
     assert "${CHATBI_API_UPSTREAM}" in text
     assert "${CHATBI_NGINX_PROXY_TIMEOUT}" in text
     assert "$host" in text
-    assert "proxy_pass http://chatbi_api/" in text
+    # 动态解析上游，避免 api 容器重建后旧 IP 导致 502
+    assert "resolver 127.0.0.11" in text
+    assert "rewrite ^/api/(.*)$ /$1 break;" in text
+    assert 'set $chatbi_upstream "${CHATBI_API_UPSTREAM}"' in text
+    assert "proxy_pass http://$chatbi_upstream;" in text
+    assert "upstream chatbi_api" not in text
 
 
 def test_nginx_entrypoint_exists():

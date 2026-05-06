@@ -1,10 +1,8 @@
 # ChatBI 入口：静态资源 + /api 反代（超时与上游由容器环境变量注入，见 .env.example）
 # 仅占位符 ${CHATBI_API_UPSTREAM}、${CHATBI_NGINX_PROXY_TIMEOUT} 由 envsubst 替换；其余 $host 等保留给 Nginx
-
-upstream chatbi_api {
-    server ${CHATBI_API_UPSTREAM};
-    keepalive 32;
-}
+#
+# 不在静态 upstream { server api:8000 } 里写死主机名：api 容器重建后 IP 会变，Nginx 会缓存旧 IP 导致 502。
+# 使用 127.0.0.11（Docker 内置 DNS）+ 变量 proxy_pass，按 valid 周期重新解析。
 
 server {
     listen 80;
@@ -17,7 +15,11 @@ server {
     gzip_types text/plain text/css application/json application/javascript text/xml application/xml;
 
     location /api/ {
-        proxy_pass http://chatbi_api/;
+        resolver 127.0.0.11 ipv6=off valid=10s;
+        resolver_timeout 5s;
+        rewrite ^/api/(.*)$ /$1 break;
+        set $chatbi_upstream "${CHATBI_API_UPSTREAM}";
+        proxy_pass http://$chatbi_upstream;
         proxy_http_version 1.1;
         proxy_set_header Connection "";
         proxy_set_header Host $host;
@@ -51,7 +53,11 @@ server {
     gzip_types text/plain text/css application/json application/javascript text/xml application/xml;
 
     location /api/ {
-        proxy_pass http://chatbi_api/;
+        resolver 127.0.0.11 ipv6=off valid=10s;
+        resolver_timeout 5s;
+        rewrite ^/api/(.*)$ /$1 break;
+        set $chatbi_upstream "${CHATBI_API_UPSTREAM}";
+        proxy_pass http://$chatbi_upstream;
         proxy_http_version 1.1;
         proxy_set_header Connection "";
         proxy_set_header Host $host;

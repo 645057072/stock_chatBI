@@ -56,3 +56,28 @@ def test_extract_contentitem_image_only():
     ]
     assert "image_show/foo.png" in extract_assistant_text(delta)
     assert "![" in extract_assistant_text(delta)
+
+
+def test_extract_falls_back_to_function_when_assistant_empty():
+    """工具调用后 assistant 无正文时，展示 exc_sql 等 function 角色的返回。"""
+    delta = [
+        {"role": "assistant", "content": ""},
+        {
+            "role": "function",
+            "name": "exc_sql",
+            "content": "| trade_date | close_price |\n|---:|---:|\n| 2024-01-02 | 1800 |",
+        },
+    ]
+    out = extract_assistant_text(delta)
+    assert "trade_date" in out
+    assert "1800" in out
+
+
+def test_extract_prefers_assistant_over_function_when_both_present():
+    delta = [
+        {"role": "assistant", "content": "结论摘要"},
+        {"role": "function", "name": "exc_sql", "content": "| a |\n| 1 |"},
+    ]
+    out = extract_assistant_text(delta)
+    assert "结论摘要" in out
+    assert "| a |" not in out

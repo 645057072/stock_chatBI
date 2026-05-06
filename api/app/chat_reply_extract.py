@@ -83,7 +83,12 @@ def _assistant_visible_blocks(item: dict) -> list[str]:
 
 
 def extract_assistant_text(delta: list[Any]) -> str:
-    """从助手增量消息列表中提取所有 assistant 角色的可见文本。"""
+    """
+    从本轮增量消息中提取对用户可见的正文。
+
+    顺序：先汇总 assistant（content + reasoning_content）；若为空，再汇总 function/tool
+    的工具返回（如 exc_sql 的 Markdown 表格）。避免模型未写总结句但工具已产出结果时显示「无文本回复」。
+    """
     chunks: list[str] = []
     for item in delta:
         if not isinstance(item, dict):
@@ -93,5 +98,19 @@ def extract_assistant_text(delta: list[Any]) -> str:
         blocks = _assistant_visible_blocks(item)
         if blocks:
             chunks.append("\n\n".join(blocks))
+
+    if not chunks:
+        fn_parts: list[str] = []
+        for item in delta:
+            if not isinstance(item, dict):
+                continue
+            if item.get("role") not in ("function", "tool"):
+                continue
+            t = content_to_plain_text(item.get("content")).strip()
+            if t:
+                fn_parts.append(t)
+        if fn_parts:
+            chunks.append("\n\n".join(fn_parts))
+
     merged = "\n\n".join(chunks).strip()
     return merged if merged else "（无文本回复）"

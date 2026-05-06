@@ -10,11 +10,14 @@ import uuid
 from contextlib import asynccontextmanager
 from typing import Annotated, Any
 
+import redis.exceptions as redis_exc
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import text
+from sqlalchemy.exc import OperationalError
 from starlette.concurrency import run_in_threadpool
+from starlette.responses import JSONResponse
 
 from app.auth_util import hash_password, verify_password
 from app.config import get_settings
@@ -76,10 +79,40 @@ async def lifespan(app: FastAPI):
         )
         assert last_exc is not None
         raise last_exc
+
+    # 认证与限流依赖 Redis；启动阶段校验避免运行期未捕获异常表现为 500
+    last_redis: BaseException | None = None
+    for attempt in range(45):
+        try:
+            get_redis().ping()
+            log.info("Redis 已就绪")
+            break
+        except redis_exc.RedisError as exc:
+            last_redis = exc
+            log.warning(
+                "Redis 启动校验第 %s 次失败，2s 后重试：%s",
+                attempt + 1,
+                exc,
+            )
+            time.sleep(2)
+    else:
+        log.error("Redis 启动校验最终失败：%s", last_redis)
+        assert last_redis is not None
+        raise last_redis
+
     yield
 
 
 app = FastAPI(title="ChatBI Stock API", lifespan=lifespan)
+
+
+@app.exception_handler(redis_exc.RedisError)
+async def handle_redis_error(request: Request, exc: redis_exc.RedisError):
+    """Redis 故障时返回 JSON，避免代理层收到异常体表现为 500 HTML。"""
+    return JSONResponse(
+        status_code=503,
+        content={"detail": "会话或缓存服务暂不可用，请稍后重试（Redis）。"},
+    )
 
 # 助手生成的图表静态目录（URL 由 Nginx 将 /api 前缀转到本服务）
 app.mount(
@@ -350,19 +383,22 @@ def register(request: Request, body: RegisterBody):
     _validate_username(body.username)
 
     eng = get_engine()
-    with eng.begin() as conn:
-        row = conn.execute(
-            text("SELECT id FROM app_users WHERE username = :u"),
-            {"u": body.username},
-        ).first()
-        if row:
-            raise HTTPException(status_code=409, detail="用户名已存在")
-        conn.execute(
-            text(
-                "INSERT INTO app_users (username, password_hash) VALUES (:u, :p)"
-            ),
-            {"u": body.username, "p": hash_password(body.password)},
-        )
+    try:
+        with eng.begin() as conn:
+            row = conn.execute(
+                text("SELECT id FROM app_users WHERE username = :u"),
+                {"u": body.username},
+            ).first()
+            if row:
+                raise HTTPException(status_code=409, detail="用户名已存在")
+            conn.execute(
+                text(
+                    "INSERT INTO app_users (username, password_hash) VALUES (:u, :p)"
+                ),
+                {"u": body.username, "p": hash_password(body.password)},
+            )
+    except OperationalError as e:
+        raise HTTPException(status_code=503, detail="数据库暂不可用，请稍后重试") from e
     return {"ok": True}
 
 
@@ -375,13 +411,16 @@ def login(request: Request, response: Response, body: LoginBody):
         raise HTTPException(status_code=429, detail="请求过于频繁，请稍后再试")
 
     eng = get_engine()
-    with eng.connect() as conn:
-        row = conn.execute(
-            text(
-                "SELECT id, username, password_hash FROM app_users WHERE username = :u"
-            ),
-            {"u": body.username},
-        ).mappings().first()
+    try:
+        with eng.connect() as conn:
+            row = conn.execute(
+                text(
+                    "SELECT id, username, password_hash FROM app_users WHERE username = :u"
+                ),
+                {"u": body.username},
+            ).mappings().first()
+    except OperationalError as e:
+        raise HTTPException(status_code=503, detail="数据库暂不可用，请稍后重试") from e
     if not row or not verify_password(body.password, row["password_hash"]):
         raise HTTPException(status_code=401, detail="用户名或密码错误")
 

@@ -23,9 +23,35 @@ def test_nginx_template_has_envsubst_placeholders():
     assert "upstream chatbi_api" not in text
 
 
+def test_api_location_set_upstream_before_rewrite():
+    """避免 rewrite break 后变量未初始化导致 proxy_pass http:// 空主机。"""
+    p = _repo_root() / "deploy" / "nginx.conf.template"
+    text = p.read_text(encoding="utf-8")
+    pos = 0
+    for _ in range(2):
+        s = text.find("set $chatbi_upstream", pos)
+        r = text.find("rewrite ^/api/", pos)
+        assert s != -1 and r != -1, "每个 server 块须含 set 与 rewrite"
+        assert s < r
+        pos = r + 10
+
+
+def test_substituted_upstream_literal_nonempty():
+    """模拟 envsubst 后上游片段不得为空（对应 nginx invalid URL prefix）。"""
+    p = _repo_root() / "deploy" / "nginx.conf.template"
+    raw = p.read_text(encoding="utf-8")
+    out = raw.replace("${CHATBI_API_UPSTREAM}", "api:8000").replace(
+        "${CHATBI_NGINX_PROXY_TIMEOUT}", "600s"
+    )
+    assert 'set $chatbi_upstream "api:8000"' in out
+    assert 'proxy_pass http://$chatbi_upstream;' in out
+
+
 def test_nginx_entrypoint_exists():
     p = _repo_root() / "deploy" / "nginx-entrypoint.sh"
     assert p.is_file()
     body = p.read_text(encoding="utf-8")
     assert "envsubst" in body
     assert "CHATBI_API_UPSTREAM" in body
+    assert "tr -d" in body and "\\r" in body  # 字面量 \r，去除 Windows .env 带入的 CR
+    assert '[ -z "$CHATBI_API_UPSTREAM" ]' in body

@@ -100,9 +100,11 @@ services:
         condition: service_healthy
     volumes:
       - chatbi_images:/app/image_show
-    # 显式指定嵌入式 DNS，减轻个别主机 resolv.conf 异常导致应用进程解析失败
+    # 127.0.0.11 解析 compose 服务名；追加公网 DNS 避免部分 ECS 上嵌入式 DNS 对外部域名（如 dashscope.aliyuncs.com）间歇 -3 解析失败
     dns:
       - 127.0.0.11
+      - 223.5.5.5
+      - 223.6.6.6
     networks:
       - chatbi_internal
     healthcheck:

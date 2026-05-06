@@ -55,17 +55,13 @@ def _ensure_api_pkg_path() -> None:
 
 
 _ensure_api_pkg_path()
+from app.matplotlib_cn import configure_matplotlib_fonts
 from app.sql_guard import validate_exc_sql_or_raise
+from app.stock_display import axis_label_zh, rename_dataframe_columns_zh, stock_name_needs_resolve
 
 from chatbi_mysql_env import stock_mysql_params
-# 解决中文显示问题
-plt.rcParams["font.sans-serif"] = [
-    "SimHei",
-    "Microsoft YaHei",
-    "SimSun",
-    "Arial Unicode MS",
-]
-plt.rcParams["axes.unicode_minus"] = False
+
+configure_matplotlib_fonts()
 
 # DashScope 配置
 dashscope.api_key = os.getenv("DASHSCOPE_API_KEY", "")
@@ -117,6 +113,7 @@ CREATE TABLE stock_daily (
 9) 当 exc_sql 返回「查询结果为空」且涉及具体股票（含 ts_code 或可映射到 ts_code）时，或用户明确要求从网络同步/下载/更新行情时，**最多调用一次** sync_stock_daily：ts_code（必填，如 600519.SH）；start_date、end_date 一般**留空**由工具默认（约两年前至今天）。**禁止**在已成功同步且工具返回里已给出复查 SQL 的情况下再次调用 sync_stock_daily（浪费 token）。成功写入后**只调用一次** exc_sql 按返回中的 SQL 复查。**未配置 TUSHARE_TOKEN 时须如实说明无法拉取，禁止编造行情。**
 10) 用户说「近一年」「过去一年」「一年来」「最新一年」等**滚动窗口**时，SQL 必须使用 **DATE_SUB(CURDATE(), INTERVAL 1 YEAR)** 与 **trade_date <= CURDATE()** 界定区间；**禁止**随意写死如「2023-01-01 至 2024-01-01」这类与用户意图不符的旧年份，除非用户明确指定该历史年份区间。
 11) sync_stock_daily：**不要**自行把 end_date 写成往年某一天（会与「近一年 + CURDATE()」查询错位）；日期参数优先省略。若 Tushare 拉取结果为 0 条，应向用户说明可能原因：代码错误、该股未在 A 股上市/已退市无日线、或接口权限/积分不足——**不可**反复同步同一 ts_code。
+12) 当用户**同一轮问题**中同时要求布林带（超买/超卖/BOLL）与「预测未来股价 / ARIMA / 未来 n 天」时，须**依次**调用：先 **boll_detection**（完整输出），再 **arima_stock**（同一 ts_code、用户指定的预测天数 n）；两次工具返回的表格与图片均须**原样完整**出现在答复中，禁止只保留其中一次结果。
 
 你需要根据用户问题生成 SQL（MySQL 方言）并调用 exc_sql 工具执行，返回查询结果；预测类问题调用 arima_stock；布林带检测调用 boll_detection；周期性分析调用 prophet_analysis；**本地无数据时先 sync_stock_daily 再查库**。
 
@@ -417,6 +414,69 @@ def _fetch_stock_display_name(pro, ts_code: str) -> str:
     return ts_code.split(".")[0][:32]
 
 
+def _enrich_df_display_stock_names(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    查询结果中 stock_name 若仅为数字代码或与 ts_code 混淆，则用 Tushare stock_basic 纠偏；
+    若无 stock_name 列则插入（便于多证券对比图例）。
+    """
+    cols_lower = {str(c).lower(): c for c in df.columns}
+    if "ts_code" not in cols_lower:
+        return df
+    ts_col = cols_lower["ts_code"]
+    out = df.copy()
+    sn_col = cols_lower.get("stock_name")
+    pro = None
+    if tushare_token:
+        try:
+            pro = ts.pro_api()
+        except Exception:
+            pro = None
+    if not sn_col:
+        idx = out.columns.get_loc(ts_col)
+        resolved = [
+            _fetch_stock_display_name(pro, str(tc)) if pro else str(tc).split(".")[0][:32]
+            for tc in out[ts_col].astype(str)
+        ]
+        out.insert(idx + 1, "stock_name", resolved)
+    else:
+        sn_actual = sn_col
+        for tc in out[ts_col].astype(str).str.strip().unique():
+            mask = out[ts_col].astype(str).str.strip() == tc
+            sample = out.loc[mask, sn_actual].iloc[0]
+            if stock_name_needs_resolve(sample, tc):
+                name = _fetch_stock_display_name(pro, tc) if pro else str(tc).split(".")[0][:32]
+                out.loc[mask, sn_actual] = name
+    return out
+
+
+def _display_name_for_ts_code(ts_code: str, db_name: object) -> str:
+    """工具输出用证券简称：库内错误代码占位时优先 Tushare 名称。"""
+    tc = str(ts_code).strip()
+    if not stock_name_needs_resolve(db_name, tc):
+        return str(db_name).strip()
+    if tushare_token:
+        try:
+            return _fetch_stock_display_name(ts.pro_api(), tc)
+        except Exception:
+            pass
+    return tc.split(".")[0][:32]
+
+
+def _plot_legend_label(sub: pd.DataFrame, group_key: object, group_col: Optional[str]) -> str:
+    """折线图图例：优先「简称 (证券代码)」。"""
+    if group_col == "stock_name":
+        return str(group_key)
+    if "ts_code" in sub.columns:
+        tc = str(sub["ts_code"].iloc[-1]).strip()
+        sn = sub["stock_name"].iloc[-1] if "stock_name" in sub.columns else None
+        if not stock_name_needs_resolve(sn, tc):
+            return f"{str(sn).strip()} ({tc})"
+        return tc
+    if "stock_name" in sub.columns:
+        return str(sub["stock_name"].iloc[-1])
+    return str(group_key) if group_key is not None else ""
+
+
 def _upsert_stock_daily_from_tushare(ts_code: str, start_d: date, end_d: date) -> tuple[int, str]:
     """
     调用 Tushare daily，写入 stock_daily（ON DUPLICATE KEY UPDATE）。
@@ -599,13 +659,14 @@ def _realtime_block_for_codes(ts_codes: list[str]) -> str:
         regex=True,
     )
     out = "### 实时交易补充（Tushare 最近交易日）\n\n"
-    out += rdf.to_markdown(index=False, tablefmt="github")
+    out += rename_dataframe_columns_zh(rdf.copy()).to_markdown(index=False, tablefmt="github")
     out += "\n\n> 该部分用于补充实时交易日期与行情，不替代 MySQL 历史回测口径。\n"
     return out
 
 
 def generate_chart_png(df_sql: pd.DataFrame, save_path: str) -> None:
     """根据查询结果自动生成图表：优先画时间序列折线，否则画柱状图。"""
+    configure_matplotlib_fonts()
     if df_sql is None or df_sql.empty:
         return
 
@@ -627,12 +688,12 @@ def generate_chart_png(df_sql: pd.DataFrame, save_path: str) -> None:
         except Exception:
             date_col = None
 
-    # 识别分组列（ts_code / stock_name）
+    # 多证券对比：优先按 ts_code 分组，图例用证券简称
     group_col = None
-    for c in cols:
-        if c.lower() in ("ts_code", "stock_name"):
-            group_col = c
-            break
+    if "ts_code" in df.columns and df["ts_code"].nunique() > 1:
+        group_col = "ts_code"
+    elif "stock_name" in df.columns and df["stock_name"].nunique() > 1:
+        group_col = "stock_name"
 
     # 识别数值列（优先 close_price）
     num_cols = df.select_dtypes(include=[np.number]).columns.tolist()
@@ -647,20 +708,26 @@ def generate_chart_png(df_sql: pd.DataFrame, save_path: str) -> None:
     plt.figure(figsize=(10, 6))
 
     if date_col is not None and y_col is not None:
-        # 时间序列折线图（支持按 ts_code 分组）
+        # 时间序列折线图（支持多 ts_code 对比）
         df[date_col] = pd.to_datetime(df[date_col])
         df = df.sort_values(date_col)
         if group_col is not None and group_col in df.columns and df[group_col].nunique() <= 10:
             for g, sub in df.groupby(group_col):
-                plt.plot(sub[date_col], sub[y_col], label=str(g))
+                lbl = _plot_legend_label(sub, g, group_col)
+                plt.plot(sub[date_col], sub[y_col], label=lbl)
             plt.legend()
+            plt.title("多证券收盘价对比走势")
         else:
-            plt.plot(df[date_col], df[y_col], label=str(y_col))
+            if "ts_code" in df.columns:
+                lbl = _plot_legend_label(df, None, None)
+            else:
+                lbl = str(y_col)
+            plt.plot(df[date_col], df[y_col], label=lbl)
             plt.legend()
-        plt.xlabel(str(date_col))
-        plt.ylabel(str(y_col))
+            plt.title("收盘价走势")
+        plt.xlabel(axis_label_zh(str(date_col)))
+        plt.ylabel(axis_label_zh(str(y_col)))
         plt.xticks(rotation=45)
-        plt.title("行情走势")
         plt.tight_layout()
         plt.savefig(save_path)
         plt.close()
@@ -675,8 +742,8 @@ def generate_chart_png(df_sql: pd.DataFrame, save_path: str) -> None:
     else:
         plt.bar(x, df2[y_col])
         plt.xticks(x, [str(v) for v in df2[label_col]], rotation=45, ha="right")
-        plt.xlabel(str(label_col))
-        plt.ylabel(str(y_col))
+        plt.xlabel(axis_label_zh(str(label_col)))
+        plt.ylabel(axis_label_zh(str(y_col)))
         plt.title("统计图")
     plt.tight_layout()
     plt.savefig(save_path)
@@ -808,15 +875,19 @@ class ExcSQLTool(BaseTool):
                     value=df[ts_col].astype(str).map(name_map),
                 )
 
+        df = _enrich_df_display_stock_names(df)
+
         # 只有 1 行结果时：不做可视化、不输出图片（避免误导性的“趋势/统计”图）
         if len(df.index) <= 1:
-            return (refresh_note or "") + df.head(1).to_markdown(index=False)
+            return (refresh_note or "") + rename_dataframe_columns_zh(df.head(1).copy()).to_markdown(
+                index=False, tablefmt="github"
+            )
 
         # 展示：前 5 行 + 后 5 行（中间省略），让结果更全面
         head_n = 5
         tail_n = 5
         if len(df.index) <= head_n + tail_n:
-            preview_df = df
+            preview_df = rename_dataframe_columns_zh(df.copy())
             preview_md = (
                 (refresh_note or "")
                 + "### 查询结果\n\n"
@@ -824,8 +895,8 @@ class ExcSQLTool(BaseTool):
                 + "\n"
             )
         else:
-            preview_head = df.head(head_n)
-            preview_tail = df.tail(tail_n)
+            preview_head = rename_dataframe_columns_zh(df.head(head_n).copy())
+            preview_tail = rename_dataframe_columns_zh(df.tail(tail_n).copy())
             preview_md = (
                 (refresh_note or "")
                 + "### 查询结果（前 5 行）\n\n"
@@ -839,7 +910,7 @@ class ExcSQLTool(BaseTool):
         # 描述统计：优先数值列，便于快速了解分布与极值
         numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
         if numeric_cols:
-            desc_df = df[numeric_cols].describe().round(6)
+            desc_df = rename_dataframe_columns_zh(df[numeric_cols].describe().round(6).copy())
             desc_md = desc_df.to_markdown(tablefmt="github")
         else:
             desc_md = "无可用于描述统计的数值列。"
@@ -889,6 +960,7 @@ def _plot_arima_forecast(
     hist_tail: int = 120,
 ) -> None:
     """绘制最近一段历史收盘价与预测曲线。"""
+    configure_matplotlib_fonts()
     df = hist_df.sort_values("trade_date").tail(min(hist_tail, len(hist_df))).copy()
     df["trade_date"] = pd.to_datetime(df["trade_date"])
     last_td = pd.to_datetime(hist_df["trade_date"].max())
@@ -965,6 +1037,7 @@ class ArimaStockTool(BaseTool):
             return f"未找到 ts_code={ts_code} 在最近一年内（截止今天）的数据。"
 
         df = df.sort_values("trade_date").dropna(subset=["close_price"])
+        df["stock_name"] = _display_name_for_ts_code(ts_code, df["stock_name"].iloc[-1])
         y = df["close_price"].astype(float).values
         if len(y) < ARIMA_MIN_SAMPLES:
             return (
@@ -1006,7 +1079,11 @@ class ArimaStockTool(BaseTool):
             f"- **预测**: 未来 **{n}** 个交易日收盘价\n\n"
             "> 提示：预测仅供技术演示，不构成投资建议。\n\n"
         )
-        table_md = "### 预测结果\n\n" + out_df.to_markdown(index=False, tablefmt="github") + "\n"
+        table_md = (
+            "### 预测结果\n\n"
+            + rename_dataframe_columns_zh(out_df.copy()).to_markdown(index=False, tablefmt="github")
+            + "\n"
+        )
 
         os.makedirs(IMAGE_DIR, exist_ok=True)
         filename = _safe_filename("arima")
@@ -1137,6 +1214,7 @@ def _plot_boll_chart(
     save_path: str,
 ) -> None:
     """绘制检测区间内收盘价与布林带，并标出超买/超卖点。"""
+    configure_matplotlib_fonts()
     plt.figure(figsize=(11, 6))
     plt.plot(df_vis["trade_date"], df_vis["close_price"].astype(float), label="收盘价", color="black", linewidth=1)
     plt.plot(df_vis["trade_date"], df_vis["boll_mid"], label=f"中轨({BOLL_PERIOD}日)", color="blue", linewidth=1)
@@ -1234,6 +1312,7 @@ class BollDetectionTool(BaseTool):
 
         df = df.sort_values("trade_date").reset_index(drop=True)
         df["trade_date"] = pd.to_datetime(df["trade_date"])
+        df["stock_name"] = _display_name_for_ts_code(ts_code, df["stock_name"].iloc[-1])
         close = df["close_price"].astype(float)
 
         df["boll_mid"] = close.rolling(BOLL_PERIOD, min_periods=BOLL_PERIOD).mean()
@@ -1278,7 +1357,11 @@ class BollDetectionTool(BaseTool):
             disp["trade_date"] = disp["trade_date"].dt.date
             for c in ["close_price", "boll_mid", "boll_upper", "boll_lower"]:
                 disp[c] = disp[c].astype(float).round(4)
-            table_md = "### 触点列表\n\n" + disp.to_markdown(index=False, tablefmt="github") + "\n\n"
+            table_md = (
+                "### 触点列表\n\n"
+                + rename_dataframe_columns_zh(disp).to_markdown(index=False, tablefmt="github")
+                + "\n\n"
+            )
             ob_dates = sorted(
                 hits.loc[hits["boll_signal"] == "超买", "trade_date"].dt.strftime("%Y-%m-%d").unique().tolist()
             )
@@ -1377,6 +1460,7 @@ def _plot_prophet_forecast(
     save_path: str,
 ) -> None:
     """绘制 Prophet 拟合/趋势图。"""
+    configure_matplotlib_fonts()
     fig = model.plot(forecast_df)
     fig.tight_layout()
     fig.savefig(save_path)
@@ -1389,6 +1473,7 @@ def _plot_prophet_components(
     save_path: str,
 ) -> None:
     """绘制 Prophet 趋势和季节性分解图。"""
+    configure_matplotlib_fonts()
     fig = model.plot_components(forecast_df)
     fig.tight_layout()
     fig.savefig(save_path)
@@ -1468,6 +1553,7 @@ class ProphetAnalysisTool(BaseTool):
         if len(df) < PROPHET_MIN_SAMPLES:
             return f"样本不足（当前 {len(df)} 条），Prophet 建议至少 {PROPHET_MIN_SAMPLES} 条日线。"
 
+        df["stock_name"] = _display_name_for_ts_code(ts_code, df["stock_name"].iloc[-1])
         stock_name = str(df["stock_name"].iloc[-1])
         train_df = pd.DataFrame(
             {

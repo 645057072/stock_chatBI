@@ -29,7 +29,12 @@ def run_agent_turn(messages: list) -> list:
 
 
 def rewrite_markdown_images(text: str, static_prefix: str) -> str:
-    """将助手返回的相对路径图片改为经网关访问的绝对路径前缀。"""
+    """
+    将助手返回的图片路径改为经网关可访问的 URL。
+    FastAPI 将 StaticFiles 挂在 /static，目录即 image_show 根目录，
+    故对外路径为 {prefix}/文件名.png，不能再嵌套一段 image_show（否则会 404）。
+    """
     if not text:
         return text
-    return text.replace("](image_show/", f"]({static_prefix}/image_show/")
+    base = static_prefix.rstrip("/")
+    return text.replace("](image_show/", f"]({base}/")

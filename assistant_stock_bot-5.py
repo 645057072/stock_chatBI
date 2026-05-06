@@ -65,6 +65,9 @@ IMAGE_DIR = os.getenv(
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "image_show"),
 )
 
+# 查询结果中最新交易日若落后于「今天」超过该天数，则触发 Tushare 补数并按「截止今天的近一年」重查（单 ts_code 收盘价走势）
+STALE_MAX_TRADE_LAG_DAYS = 14
+
 # ====== 股票助手 system prompt ======
 system_prompt = """你是股票查询助手。你连接的 MySQL 数据库中已经有历史日线行情表（唯一数据源）：
 
@@ -94,11 +97,14 @@ CREATE TABLE stock_daily (
 7) 当用户要求“布林带 / 超买超卖 / BOLL”等时，必须调用 boll_detection 工具：ts_code（必填）；start_date、end_date（可选，YYYY-MM-DD，默认近一年至今天）。**工具返回后必须原样粘贴全部内容（含「触点日期列表」行与表格），禁止自行改写、概括或另写一套日期。**
 8) 当用户要求“Prophet / 周期性分析 / trend weekly yearly”等时，必须调用 prophet_analysis：ts_code（必填）；start_date、end_date（可选，YYYY-MM-DD，默认近一年）。禁止手写趋势与季节性结论。
 9) 当 exc_sql 返回「查询结果为空」且涉及具体股票（含 ts_code 或可映射到 ts_code）时，或用户明确要求从网络同步/下载/更新行情时，必须先调用 sync_stock_daily：ts_code（必填，如 600519.SH）；start_date、end_date（可选，YYYY-MM-DD，默认约近两年至今）。成功写入后再用 exc_sql 复查。**未配置 TUSHARE_TOKEN 时须如实说明无法拉取，禁止编造行情。**
+10) 用户说「近一年」「过去一年」「一年来」「最新一年」等**滚动窗口**时，SQL 必须使用 **DATE_SUB(CURDATE(), INTERVAL 1 YEAR)** 与 **trade_date <= CURDATE()** 界定区间；**禁止**随意写死如「2023-01-01 至 2024-01-01」这类与用户意图不符的旧年份，除非用户明确指定该历史年份区间。
 
 你需要根据用户问题生成 SQL（MySQL 方言）并调用 exc_sql 工具执行，返回查询结果；预测类问题调用 arima_stock；布林带检测调用 boll_detection；周期性分析调用 prophet_analysis；**本地无数据时先 sync_stock_daily 再查库**。
 
 常用查询示例（按需选择）：
-- 某只股票某段时间收盘价走势：
+- 某只股票「近一年」收盘价走势（必须用 CURDATE，勿写死往年）：
+  SELECT trade_date, stock_name, ts_code, close_price FROM stock_daily WHERE ts_code='600519.SH' AND trade_date >= DATE_SUB(CURDATE(), INTERVAL 1 YEAR) AND trade_date <= CURDATE() ORDER BY trade_date;
+- 某只股票某自定义历史区间收盘价：
   SELECT trade_date, close_price FROM stock_daily WHERE ts_code='600519.SH' AND trade_date BETWEEN '2020-01-01' AND CURDATE() ORDER BY trade_date;
 - 多只股票同一时间段对比：
   SELECT trade_date, ts_code, close_price FROM stock_daily WHERE ts_code IN (...) AND trade_date BETWEEN ... ORDER BY trade_date, ts_code;
@@ -643,6 +649,68 @@ def generate_chart_png(df_sql: pd.DataFrame, save_path: str) -> None:
     plt.close()
 
 
+def _refresh_stale_price_window_if_needed(
+    sql_input: str, df: pd.DataFrame, engine
+) -> tuple[pd.DataFrame, str]:
+    """
+    单 ts_code、结果含 trade_date 与收盘价列时：若最新交易日明显早于今天，
+    则用 Tushare 补写近期日线，并用「截止今天的近一年」标准 SQL 重查，避免陈旧库表误导用户。
+    """
+    note = ""
+    if not tushare_token:
+        return df, note
+    codes = _extract_ts_codes_from_sql(sql_input)
+    if len(codes) != 1:
+        return df, note
+    ts_code = codes[0]
+    cols_lower = {str(c).lower(): c for c in df.columns}
+    if "trade_date" not in cols_lower:
+        return df, note
+    price_col = None
+    for k in ("close_price", "close"):
+        if k in cols_lower:
+            price_col = cols_lower[k]
+            break
+    if price_col is None:
+        return df, note
+    td_col = cols_lower["trade_date"]
+    try:
+        max_td = pd.to_datetime(df[td_col], errors="coerce").max()
+        if pd.isna(max_td):
+            return df, note
+        max_d = max_td.date()
+    except Exception:
+        return df, note
+    if (date.today() - max_d).days <= STALE_MAX_TRADE_LAG_DAYS:
+        return df, note
+    try:
+        start_d = date.today() - timedelta(days=800)
+        _upsert_stock_daily_from_tushare(ts_code, start_d, date.today())
+    except Exception:
+        return df, note
+    fallback = text(
+        """
+        SELECT trade_date, stock_name, ts_code, close_price
+        FROM stock_daily
+        WHERE ts_code = :ts_code
+          AND trade_date >= DATE_SUB(CURDATE(), INTERVAL 1 YEAR)
+          AND trade_date <= CURDATE()
+        ORDER BY trade_date
+        """
+    )
+    try:
+        df2 = pd.read_sql(fallback, engine, params={"ts_code": ts_code})
+    except Exception:
+        return df, note
+    if df2 is None or df2.empty:
+        return df, note
+    note = (
+        f"> **说明**：检测到本次查询结果最新交易日为 **{max_d}**，与当前日期差距较大；"
+        "已在服务端尝试从网络补齐行情，并按「**截止今天的近一年**」重新汇总如下。\n\n"
+    )
+    return df2, note
+
+
 @register_tool("exc_sql")
 class ExcSQLTool(BaseTool):
     """SQL 查询工具：执行 MySQL SQL 并返回 markdown + 图表。"""
@@ -673,6 +741,10 @@ class ExcSQLTool(BaseTool):
             # 直接把异常信息返回给前端，便于定位（例如：MySQL 未启动、账号无权限、端口被占用、驱动缺失等）
             return f"连接/查询 MySQL 失败：{type(e).__name__}: {e}"
 
+        refresh_note = ""
+        if df is not None and not df.empty:
+            df, refresh_note = _refresh_stale_price_window_if_needed(sql_input, df, engine)
+
         if session_id is not None:
             _last_df_dict[session_id] = df
 
@@ -697,19 +769,25 @@ class ExcSQLTool(BaseTool):
 
         # 只有 1 行结果时：不做可视化、不输出图片（避免误导性的“趋势/统计”图）
         if len(df.index) <= 1:
-            return df.head(1).to_markdown(index=False)
+            return (refresh_note or "") + df.head(1).to_markdown(index=False)
 
         # 展示：前 5 行 + 后 5 行（中间省略），让结果更全面
         head_n = 5
         tail_n = 5
         if len(df.index) <= head_n + tail_n:
             preview_df = df
-            preview_md = "### 查询结果\n\n" + preview_df.to_markdown(index=False, tablefmt="github") + "\n"
+            preview_md = (
+                (refresh_note or "")
+                + "### 查询结果\n\n"
+                + preview_df.to_markdown(index=False, tablefmt="github")
+                + "\n"
+            )
         else:
             preview_head = df.head(head_n)
             preview_tail = df.tail(tail_n)
             preview_md = (
-                "### 查询结果（前 5 行）\n\n"
+                (refresh_note or "")
+                + "### 查询结果（前 5 行）\n\n"
                 + preview_head.to_markdown(index=False, tablefmt="github")
                 + "\n\n（中间省略）\n\n"
                 + "### 查询结果（后 5 行）\n\n"

@@ -184,6 +184,19 @@ export default function ChatPage() {
             <span className={styles.headerTitle}>股票查询对话</span>
           </header>
 
+          <section className={styles.capInline} aria-label="系统服务能力">
+            <div className={styles.capInlineTitle}>服务能力</div>
+            <ul className={styles.capInlineList}>
+              <li>优先使用已落地的股票日线数据作答，响应更快、结果更稳定。</li>
+              <li>本地缺数据或过旧时自动从外部行情源补齐，再继续回答。</li>
+              <li>用口语描述即可生成数据表格，并配上走势类图表便于阅读。</li>
+              <li>基于历史价格给出短期走向参考，适合辅助观察节奏。</li>
+              <li>从波动区间角度提示阶段性的相对偏高或偏低位置。</li>
+              <li>把长期走势拆成趋势与季节性等成分，并用图直观展示。</li>
+              <li>理解您的问题并调度上述能力，综合生成分析与说明。</li>
+            </ul>
+          </section>
+
           <div className={styles.feed}>
             {showPromptCache ? (
               <div className={styles.promptCache}>
@@ -258,19 +271,6 @@ export default function ChatPage() {
             <p className={styles.disclaimer}>内容由 AI 生成，请仔细甄别</p>
           </footer>
         </main>
-
-        <aside className={styles.capPanel} aria-label="系统服务能力">
-          <div className={styles.capTitle}>服务能力</div>
-          <ul className={styles.capList}>
-            <li>优先使用已落地的股票日线数据作答，响应更快、结果更稳定。</li>
-            <li>本地缺数据时可自动从外部行情源补齐，再继续回答您的问题。</li>
-            <li>用口语描述即可生成数据表格，并配上走势类图表便于阅读。</li>
-            <li>基于历史价格给出短期走向参考，适合辅助观察节奏。</li>
-            <li>从波动区间角度提示阶段性的相对偏高或偏低位置。</li>
-            <li>把长期走势拆成趋势与季节性等成分，并用图直观展示。</li>
-            <li>理解您的问题并调度上述能力，综合生成分析与说明。</li>
-          </ul>
-        </aside>
       </div>
     </div>
   );

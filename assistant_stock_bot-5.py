@@ -114,8 +114,9 @@ CREATE TABLE stock_daily (
 6) 当用户要求“预测未来股价 / ARIMA / 未来 n 天”等时，必须调用 arima_stock 工具：参数 ts_code（必填）、n（预测交易日数量，必填）。不要手写预测数值。
 7) 当用户要求“布林带 / 超买超卖 / BOLL”等时，必须调用 boll_detection 工具：ts_code（必填）；start_date、end_date（可选，YYYY-MM-DD，默认近一年至今天）。**工具返回后必须原样粘贴全部内容（含「触点日期列表」行与表格），禁止自行改写、概括或另写一套日期。**
 8) 当用户要求“Prophet / 周期性分析 / trend weekly yearly”等时，必须调用 prophet_analysis：ts_code（必填）；start_date、end_date（可选，YYYY-MM-DD，默认近一年）。禁止手写趋势与季节性结论。
-9) 当 exc_sql 返回「查询结果为空」且涉及具体股票（含 ts_code 或可映射到 ts_code）时，或用户明确要求从网络同步/下载/更新行情时，必须先调用 sync_stock_daily：ts_code（必填，如 600519.SH）；start_date、end_date（可选，YYYY-MM-DD，默认约近两年至今）。成功写入后再用 exc_sql 复查。**未配置 TUSHARE_TOKEN 时须如实说明无法拉取，禁止编造行情。**
+9) 当 exc_sql 返回「查询结果为空」且涉及具体股票（含 ts_code 或可映射到 ts_code）时，或用户明确要求从网络同步/下载/更新行情时，**最多调用一次** sync_stock_daily：ts_code（必填，如 600519.SH）；start_date、end_date 一般**留空**由工具默认（约两年前至今天）。**禁止**在已成功同步且工具返回里已给出复查 SQL 的情况下再次调用 sync_stock_daily（浪费 token）。成功写入后**只调用一次** exc_sql 按返回中的 SQL 复查。**未配置 TUSHARE_TOKEN 时须如实说明无法拉取，禁止编造行情。**
 10) 用户说「近一年」「过去一年」「一年来」「最新一年」等**滚动窗口**时，SQL 必须使用 **DATE_SUB(CURDATE(), INTERVAL 1 YEAR)** 与 **trade_date <= CURDATE()** 界定区间；**禁止**随意写死如「2023-01-01 至 2024-01-01」这类与用户意图不符的旧年份，除非用户明确指定该历史年份区间。
+11) sync_stock_daily：**不要**自行把 end_date 写成往年某一天（会与「近一年 + CURDATE()」查询错位）；日期参数优先省略。若 Tushare 拉取结果为 0 条，应向用户说明可能原因：代码错误、该股未在 A 股上市/已退市无日线、或接口权限/积分不足——**不可**反复同步同一 ts_code。
 
 你需要根据用户问题生成 SQL（MySQL 方言）并调用 exc_sql 工具执行，返回查询结果；预测类问题调用 arima_stock；布林带检测调用 boll_detection；周期性分析调用 prophet_analysis；**本地无数据时先 sync_stock_daily 再查库**。
 
@@ -215,7 +216,7 @@ functions_desc = [
     },
     {
         "name": "sync_stock_daily",
-        "description": "从 Tushare 拉取指定证券日线写入 MySQL stock_daily，用于库中缺失时的补数",
+        "description": "从 Tushare 拉取日线写入 MySQL；库无数据时调用。**日期参数建议全省略**（约两年前至今天），勿手写往年结束日",
         "parameters": {
             "type": "object",
             "properties": {
@@ -225,11 +226,11 @@ functions_desc = [
                 },
                 "start_date": {
                     "type": "string",
-                    "description": "开始日期 YYYY-MM-DD（可选，默认结束日期往前约两年）",
+                    "description": "开始日期 YYYY-MM-DD（可选；不确定时请省略）",
                 },
                 "end_date": {
                     "type": "string",
-                    "description": "结束日期 YYYY-MM-DD（可选，默认今天）",
+                    "description": "结束日期 YYYY-MM-DD（可选；不确定时请省略。服务端会对齐到今天）",
                 },
             },
             "required": ["ts_code"],
@@ -504,8 +505,8 @@ class SyncStockDailyTool(BaseTool):
     """通过 Tushare 拉取日线并写入本地 MySQL，供库中无数据时使用。"""
 
     description = (
-        "从 Tushare 拉取指定 ts_code 的日线行情并写入 MySQL 表 stock_daily；"
-        "库中无数据或用户要求同步网络行情时调用"
+        "从 Tushare 拉取指定 ts_code 的日线写入 MySQL stock_daily；库无数据时调用。"
+        "start_date/end_date 建议省略（默认约两年前至今天）；勿填往年结束日。"
     )
     parameters = [
         {
@@ -523,7 +524,7 @@ class SyncStockDailyTool(BaseTool):
         {
             "name": "end_date",
             "type": "string",
-            "description": "结束日期 YYYY-MM-DD（可选，默认今天）",
+            "description": "结束日期 YYYY-MM-DD（可选；省略则拉到「今天」。勿填往年日期）",
             "required": False,
         },
     ]
@@ -540,11 +541,17 @@ class SyncStockDailyTool(BaseTool):
         if not re.match(r"^\d{6}\.(SH|SZ|BJ)$", ts_code):
             return "ts_code 格式应为 6 位数字+.SH/.SZ/.BJ，例如 600519.SH。"
 
-        end_d = _parse_opt_date_yyyy_mm_dd(args.get("end_date"), date.today())
+        today = date.today()
+        end_d = _parse_opt_date_yyyy_mm_dd(args.get("end_date"), today)
+        end_d = min(end_d, today)
+        # 模型常误填往年结束日，导致本地「近一年 + CURDATE()」SQL 与已写入区间无交集 → 反复空查与重复同步
+        if end_d < today:
+            end_d = today
+
         start_default = end_d - timedelta(days=730)
         start_d = _parse_opt_date_yyyy_mm_dd(args.get("start_date"), start_default)
         if start_d > end_d:
-            return "start_date 不能晚于 end_date。"
+            start_d = end_d - timedelta(days=730)
 
         try:
             n, stock_name = _upsert_stock_daily_from_tushare(ts_code, start_d, end_d)
@@ -555,12 +562,21 @@ class SyncStockDailyTool(BaseTool):
 
         if n == 0:
             return (
-                f"未从 Tushare 获取到 {ts_code}（{stock_name}）在 {start_d} ~ {end_d} 的日线；"
-                "请确认代码正确、接口权限与积分是否足够。"
+                f"未从 Tushare 获取到 **{ts_code}**（{stock_name}）在 **{start_d}** ~ **{end_d}** 的日线。\n"
+                "可能原因：① 证券代码错误或该股未在沪深北交所上市、已退市且无可用日线；② Tushare 积分/权限不足或接口暂不可用；③ 该股暂无公开日线披露。\n"
+                "请向用户如实说明：若无上市日线数据则无法绘制「收盘价走势」；财报数据需其他数据源，本助手不提供财报库。"
             )
+        sql_1y = (
+            f"SELECT trade_date, stock_name, ts_code, close_price FROM stock_daily "
+            f"WHERE ts_code='{ts_code}' "
+            f"AND trade_date >= DATE_SUB(CURDATE(), INTERVAL 1 YEAR) AND trade_date <= CURDATE() "
+            f"ORDER BY trade_date"
+        )
         return (
             f"已从网络同步 **{stock_name}**（`{ts_code}`）日线 **{n}** 条到 `stock_daily`，"
-            f"区间 **{start_d}** ~ **{end_d}**。请继续用 exc_sql 查询验证。"
+            f"区间 **{start_d}** ~ **{end_d}**（结束日已对齐到今天，避免与「近一年」查询错位）。\n\n"
+            "**下一步（仅执行一次 exc_sql，禁止再调用 sync）**：exc_sql 的 sql_input 必须为下列整句（勿改日期函数）：\n"
+            f"{sql_1y}"
         )
 
 
@@ -772,8 +788,11 @@ class ExcSQLTool(BaseTool):
 
         if df is None or df.empty:
             return (
-                "查询结果为空。若该证券在库中尚无日线，可先调用 **sync_stock_daily**（需服务端配置 "
-                "**TUSHARE_TOKEN**）从网络拉取并写入 `stock_daily`，再用 exc_sql 复查。"
+                "查询结果为空。若库中尚无该证券日线：调用 **sync_stock_daily**（仅填 ts_code，"
+                "start_date/end_date 建议省略；需 **TUSHARE_TOKEN**），然后**仅执行一次**其返回中给出的 exc_sql 复查；"
+                "勿重复 sync。\n"
+                "若 sync 返回 0 条或已说明无数据，请转告用户：该股可能没有可用的上市日线，或代码/权限有误；"
+                "财报数据不在本库。"
             )
 
         # 若结果缺少 stock_name 但包含 ts_code，则自动补全 stock_name 以便展示更完整信息

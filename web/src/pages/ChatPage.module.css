@@ -5,11 +5,11 @@
   background: #1a1a1a;
 }
 
-/* 左约 1/5 | 右侧对话区占剩余宽度（服务能力并入主栏，避免再占一列空白） */
+/* 左 20% | 中 60% | 右 20%（服务能力） */
 .centerWrap {
   flex: 1;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   min-width: 0;
   align-self: stretch;
   min-height: 100vh;
@@ -129,43 +129,67 @@
 }
 
 .main {
-  flex: 1;
+  flex: 0 0 60%;
+  width: 60%;
   min-width: 0;
   min-height: 100vh;
   display: flex;
   flex-direction: column;
 }
 
-.capInline {
-  flex-shrink: 0;
-  padding: 10px 20px 12px;
-  background: #242424;
-  border-bottom: 1px solid #333;
+.capPanel {
+  flex: 0 0 20%;
+  width: 20%;
+  min-width: 0;
+  min-height: 100vh;
+  align-self: stretch;
+  box-sizing: border-box;
+  padding: 0;
+  background: #222;
+  border-left: 1px solid #2e2e2e;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
 }
 
-.capInlineTitle {
-  font-size: 0.72rem;
+.capTitle {
+  flex-shrink: 0;
+  font-size: 0.78rem;
   font-weight: 700;
   color: #b8c5e0;
   letter-spacing: 0.04em;
-  margin-bottom: 8px;
+  margin: 0;
+  padding: 16px 14px 10px;
+  border-bottom: 1px solid #333;
+  width: 100%;
+  box-sizing: border-box;
 }
 
-.capInlineList {
+.capList {
+  flex: 1;
+  list-style: none;
   margin: 0;
-  padding-left: 1.15rem;
-  font-size: 0.71rem;
-  line-height: 1.45;
-  color: #a8a8a8;
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-  gap: 4px 20px;
+  padding: 12px 14px 24px;
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 0;
 }
 
-.capInlineList li {
-  margin: 0;
+.capList li {
+  margin-bottom: 12px;
+  font-size: 0.76rem;
+  line-height: 1.5;
+  color: #b5b5b5;
+  width: 100%;
+  box-sizing: border-box;
+  text-align: left;
   word-break: break-word;
   overflow-wrap: anywhere;
+}
+
+.capList li:last-child {
+  margin-bottom: 0;
 }
 
 .header {

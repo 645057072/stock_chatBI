@@ -10,6 +10,7 @@ import {
   apiMe,
   apiNewChatSession,
   apiSelectChatSession,
+  AUTH_EXPIRED_MESSAGE,
   ChatMessage,
   ChatSessionMeta,
   sanitizeAssistantReply,
@@ -81,6 +82,23 @@ export default function ChatPage() {
     })();
   }, [nav, refreshSessions]);
 
+  // 会话在 Redis 过期或 Cookie 失效后，切回页签时补验，避免仍停在 /chat 却全部接口 401、对话一直转圈
+  useEffect(() => {
+    const revalidate = () => {
+      if (document.visibilityState !== "visible") return;
+      void (async () => {
+        const me = await apiMe();
+        if (!me) nav("/");
+      })();
+    };
+    document.addEventListener("visibilitychange", revalidate);
+    window.addEventListener("focus", revalidate);
+    return () => {
+      document.removeEventListener("visibilitychange", revalidate);
+      window.removeEventListener("focus", revalidate);
+    };
+  }, [nav]);
+
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [rows, sending]);
@@ -98,7 +116,12 @@ export default function ChatPage() {
       setRows([]);
       setHideQuickPrompts(false);
       await refreshSessions();
-    } catch {
+    } catch (ex) {
+      const msg = ex instanceof Error ? ex.message : "";
+      if (msg === AUTH_EXPIRED_MESSAGE) {
+        nav("/");
+        return;
+      }
       setErr("新建会话失败");
     }
   }
@@ -114,7 +137,12 @@ export default function ChatPage() {
       setRows(nextRows);
       setHideQuickPrompts(nextRows.length > 0);
       await refreshSessions();
-    } catch {
+    } catch (ex) {
+      const msg = ex instanceof Error ? ex.message : "";
+      if (msg === AUTH_EXPIRED_MESSAGE) {
+        nav("/");
+        return;
+      }
       setErr("切换会话失败");
     }
   }
@@ -134,7 +162,11 @@ export default function ChatPage() {
       setRows((r) => [...r, { role: "assistant", text: reply }]);
       await refreshSessions();
     } catch (ex) {
-      setErr(ex instanceof Error ? ex.message : "发送失败");
+      const msg = ex instanceof Error ? ex.message : "发送失败";
+      setErr(msg);
+      if (msg === AUTH_EXPIRED_MESSAGE) {
+        nav("/");
+      }
     } finally {
       setSending(false);
     }
@@ -183,19 +215,6 @@ export default function ChatPage() {
           <header className={styles.header}>
             <span className={styles.headerTitle}>股票查询对话</span>
           </header>
-
-          <section className={styles.capInline} aria-label="系统服务能力">
-            <div className={styles.capInlineTitle}>服务能力</div>
-            <ul className={styles.capInlineList}>
-              <li>优先使用已落地的股票日线数据作答，响应更快、结果更稳定。</li>
-              <li>本地缺数据或过旧时自动从外部行情源补齐，再继续回答。</li>
-              <li>用口语描述即可生成数据表格，并配上走势类图表便于阅读。</li>
-              <li>基于历史价格给出短期走向参考，适合辅助观察节奏。</li>
-              <li>从波动区间角度提示阶段性的相对偏高或偏低位置。</li>
-              <li>把长期走势拆成趋势与季节性等成分，并用图直观展示。</li>
-              <li>理解您的问题并调度上述能力，综合生成分析与说明。</li>
-            </ul>
-          </section>
 
           <div className={styles.feed}>
             {showPromptCache ? (
@@ -271,6 +290,19 @@ export default function ChatPage() {
             <p className={styles.disclaimer}>内容由 AI 生成，请仔细甄别</p>
           </footer>
         </main>
+
+        <aside className={styles.capPanel} aria-label="系统服务能力">
+          <div className={styles.capTitle}>服务能力</div>
+          <ul className={styles.capList}>
+            <li>优先使用已落地的股票日线数据作答，响应更快、结果更稳定。</li>
+            <li>本地缺数据或过旧时自动从外部行情源补齐，再继续回答。</li>
+            <li>用口语描述即可生成数据表格，并配上走势类图表便于阅读。</li>
+            <li>基于历史价格给出短期走向参考，适合辅助观察节奏。</li>
+            <li>从波动区间角度提示阶段性的相对偏高或偏低位置。</li>
+            <li>把长期走势拆成趋势与季节性等成分，并用图直观展示。</li>
+            <li>理解您的问题并调度上述能力，综合生成分析与说明。</li>
+          </ul>
+        </aside>
       </div>
     </div>
   );

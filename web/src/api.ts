@@ -32,7 +32,14 @@ export function sanitizeAssistantReply(text: string): string {
   return text;
 }
 
+/** 与 ChatPage 跳转登录页文案一致 */
+export const AUTH_EXPIRED_MESSAGE = "未登录或登录已失效，请重新登录";
+
+/** 对话接口最长等待（毫秒），避免助手推理过久时界面一直转圈 */
+const CHAT_FETCH_TIMEOUT_MS = 600_000;
+
 function humanizeHttpMessage(detail: string, status: number): string {
+  if (status === 401) return AUTH_EXPIRED_MESSAGE;
   if (status === 502 || status === 503 || status === 504) return GATEWAY_ZH;
   if (looksLikeHtmlGateway(detail)) return GATEWAY_ZH;
   return detail;
@@ -94,15 +101,34 @@ export async function apiChat(
   message: string,
   sessionId?: string | null
 ): Promise<{ reply: string; session_id?: string }> {
-  const res = await fetch(`${prefix}/chat`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    credentials: "include",
-    body: JSON.stringify({
-      message,
-      ...(sessionId ? { session_id: sessionId } : {}),
-    }),
-  });
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), CHAT_FETCH_TIMEOUT_MS);
+  let res: Response;
+  try {
+    res = await fetch(`${prefix}/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      signal: ctrl.signal,
+      body: JSON.stringify({
+        message,
+        ...(sessionId ? { session_id: sessionId } : {}),
+      }),
+    });
+  } catch (e) {
+    const aborted =
+      (e instanceof Error && e.name === "AbortError") ||
+      (typeof DOMException !== "undefined" && e instanceof DOMException && e.name === "AbortError");
+    if (aborted) {
+      throw new Error("对话请求超时，请缩短问题或稍后重试");
+    }
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
+  if (res.status === 401) {
+    throw new Error(AUTH_EXPIRED_MESSAGE);
+  }
   const data = await parseJson(res);
   if (!res.ok) throw new Error(humanizeHttpMessage(errDetail(data), res.status));
   const out = data as { reply: string; session_id?: string };

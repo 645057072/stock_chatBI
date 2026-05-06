@@ -5,7 +5,7 @@
   background: #1a1a1a;
 }
 
-/* 左侧导航与中间对话 + 右侧能力说明（约 9:1） */
+/* 左 20% | 中 60% | 右 20%（屏幕约 1/5 : 3/5 : 1/5） */
 .centerWrap {
   flex: 1;
   display: flex;
@@ -14,11 +14,13 @@
 }
 
 .sidebar {
-  width: 240px;
-  flex-shrink: 0;
+  flex: 0 0 20%;
+  width: 20%;
+  min-width: 0;
+  box-sizing: border-box;
   display: flex;
   flex-direction: column;
-  padding: 16px 12px;
+  padding: 16px 10px;
   background: #222;
   border-right: 1px solid #2e2e2e;
 }
@@ -46,16 +48,59 @@
   border-color: #4a7ac9;
 }
 
-.sideHint {
-  margin-top: 16px;
-  padding: 0 10px;
-  font-size: 0.75rem;
-  color: #7a7a7a;
-  line-height: 1.4;
+.sessionList {
+  margin-top: 12px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sessionItem,
+.sessionItemActive {
+  text-align: left;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid #353535;
+  background: #282828;
+  color: #c6c6c6;
+  cursor: pointer;
+  font-size: 0.78rem;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.sessionItem:hover {
+  border-color: #4a7ac9;
+}
+
+.sessionItemActive {
+  border-color: #3d6aad;
+  background: #2a3546;
+}
+
+.sessionTitle {
+  font-weight: 600;
+  color: #e2e2e2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sessionPreview {
+  font-size: 0.7rem;
+  color: #888;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .spacer {
-  flex: 1;
+  flex-shrink: 0;
+  min-height: 8px;
 }
 
 .userBox {
@@ -80,18 +125,19 @@
 }
 
 .main {
-  flex: 9;
+  flex: 0 0 60%;
+  width: 60%;
+  min-width: 0;
   display: flex;
   flex-direction: column;
-  min-width: 0;
 }
 
 .capPanel {
-  flex: 1;
-  max-width: 280px;
-  min-width: 140px;
+  flex: 0 0 20%;
+  width: 20%;
+  min-width: 0;
   box-sizing: border-box;
-  padding: 14px 12px 20px;
+  padding: 14px 10px 20px;
   background: #1e1e1e;
   border-left: 1px solid #2e2e2e;
   overflow-y: auto;
@@ -154,6 +200,59 @@
   color: #666;
   font-size: 0.9rem;
   margin: 24px 0;
+}
+
+.promptCache {
+  margin: 16px 0 24px;
+  padding: 20px 16px;
+  border-radius: 12px;
+  background: #242424;
+  border: 1px solid #333;
+}
+
+.promptCacheTitle {
+  margin: 0 0 8px;
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: #eaeaea;
+  text-align: center;
+}
+
+.promptCacheHint {
+  margin: 0 0 16px;
+  font-size: 0.8rem;
+  color: #888;
+  text-align: center;
+}
+
+.promptChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: center;
+}
+
+.promptChip {
+  padding: 8px 14px;
+  border-radius: 999px;
+  border: 1px solid #404040;
+  background: #2e2e2e;
+  color: #d8d8d8;
+  font-size: 0.8rem;
+  cursor: pointer;
+  text-align: left;
+  max-width: 100%;
+  line-height: 1.35;
+}
+
+.promptChip:hover:not(:disabled) {
+  border-color: #4a7ac9;
+  color: #fff;
+}
+
+.promptChip:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .rowUser {
@@ -241,8 +340,8 @@
 
 .textarea {
   flex: 1;
-  min-height: 44px;
-  max-height: 160px;
+  min-height: 88px;
+  max-height: 220px;
   resize: none;
   border: none;
   background: transparent;

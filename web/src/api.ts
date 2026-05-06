@@ -54,27 +54,73 @@ export async function apiMe(): Promise<{ user_id: number; username: string } | n
   return res.json();
 }
 
-export async function apiChat(message: string): Promise<{ reply: string }> {
+export async function apiChat(
+  message: string,
+  sessionId?: string | null
+): Promise<{ reply: string; session_id?: string }> {
   const res = await fetch(`${prefix}/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     credentials: "include",
-    body: JSON.stringify({ message }),
+    body: JSON.stringify({
+      message,
+      ...(sessionId ? { session_id: sessionId } : {}),
+    }),
   });
   const data = await parseJson(res);
   if (!res.ok) throw new Error(errDetail(data));
-  return data as { reply: string };
+  return data as { reply: string; session_id?: string };
 }
 
+/** 仅清空当前会话消息（保留会话条目） */
 export async function apiClearChat() {
   await fetch(`${prefix}/chat/clear`, { method: "POST", credentials: "include" });
 }
 
 export type ChatMessage = { role: string; content: string };
 
-export async function apiChatHistory(): Promise<ChatMessage[]> {
+export type ChatSessionMeta = {
+  id: string;
+  title?: string;
+  preview?: string;
+  updated?: number;
+};
+
+export async function apiChatSessions(): Promise<{
+  sessions: ChatSessionMeta[];
+  active_session_id: string;
+}> {
+  const res = await fetch(`${prefix}/chat/sessions`, { credentials: "include" });
+  if (!res.ok) return { sessions: [], active_session_id: "" };
+  return res.json();
+}
+
+export async function apiNewChatSession(): Promise<{ session_id: string }> {
+  const res = await fetch(`${prefix}/chat/session/new`, {
+    method: "POST",
+    credentials: "include",
+  });
+  const data = await parseJson(res);
+  if (!res.ok) throw new Error(errDetail(data));
+  return data as { session_id: string };
+}
+
+export async function apiSelectChatSession(sessionId: string): Promise<void> {
+  const res = await fetch(`${prefix}/chat/session/select`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({ session_id: sessionId }),
+  });
+  const data = await parseJson(res);
+  if (!res.ok) throw new Error(errDetail(data));
+}
+
+export async function apiChatHistory(): Promise<{
+  messages: ChatMessage[];
+  session_id: string;
+}> {
   const res = await fetch(`${prefix}/chat/history`, { credentials: "include" });
-  if (!res.ok) return [];
-  const data = (await res.json()) as { messages?: ChatMessage[] };
-  return data.messages || [];
+  if (!res.ok) return { messages: [], session_id: "" };
+  return res.json();
 }

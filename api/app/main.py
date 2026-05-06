@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 import uuid
 from contextlib import asynccontextmanager
 from typing import Annotated, Any
@@ -114,6 +115,12 @@ class LoginBody(BaseModel):
 
 class ChatBody(BaseModel):
     message: str = Field(..., min_length=1, max_length=8000)
+    # 可选：与左侧历史会话一致时再发消息，避免并发串会话
+    session_id: str | None = Field(default=None, max_length=64)
+
+
+class ChatSessionSelectBody(BaseModel):
+    session_id: str = Field(..., min_length=8, max_length=64)
 
 
 _username_re = re.compile(r"^[a-zA-Z0-9_\u4e00-\u9fff]+$")
@@ -152,12 +159,104 @@ def extract_assistant_text(delta: list[Any]) -> str:
     return "\n\n".join(chunks) if chunks else "（无文本回复）"
 
 
-def _chat_history_key(user_id: int) -> str:
+# 左侧历史会话最多保留条数（仅元数据列表；消息仍受 chat_history_max_messages 限制）
+CHAT_SESSION_INDEX_MAX = 10
+
+
+def _legacy_hist_key(user_id: int) -> str:
+    """旧版单会话 Redis 键（迁移后删除）。"""
     return f"chat:hist:{user_id}"
 
 
-def _load_messages(r, user_id: int) -> list:
-    raw = r.get(_chat_history_key(user_id))
+def _sessions_index_key(user_id: int) -> str:
+    return f"chat:sessidx:{user_id}"
+
+
+def _active_sess_key(user_id: int) -> str:
+    return f"chat:active_sess:{user_id}"
+
+
+def _hist_key(user_id: int, session_id: str) -> str:
+    return f"chat:hist:{user_id}:{session_id}"
+
+
+def _load_sessions_index(r, user_id: int) -> list[dict[str, Any]]:
+    raw = r.get(_sessions_index_key(user_id))
+    if not raw:
+        return []
+    try:
+        data = json.loads(raw)
+        if isinstance(data, list):
+            return [x for x in data if isinstance(x, dict) and x.get("id")]
+    except json.JSONDecodeError:
+        pass
+    return []
+
+
+def _save_sessions_index(r, user_id: int, sessions: list[dict[str, Any]]) -> None:
+    r.set(
+        _sessions_index_key(user_id),
+        json.dumps(sessions[:CHAT_SESSION_INDEX_MAX], ensure_ascii=False),
+    )
+
+
+def _ensure_chat_sessions_structure(r, user_id: int) -> None:
+    """初始化多会话索引；若存在旧版 chat:hist:{uid} 则迁入第一条会话。"""
+    if r.exists(_sessions_index_key(user_id)):
+        return
+    sid = uuid.uuid4().hex
+    legacy = r.get(_legacy_hist_key(user_id))
+    title = "历史对话" if legacy else "新对话"
+    sessions = [
+        {
+            "id": sid,
+            "title": title,
+            "preview": "",
+            "updated": int(time.time()),
+        }
+    ]
+    if legacy:
+        r.set(_hist_key(user_id, sid), legacy)
+        r.delete(_legacy_hist_key(user_id))
+    else:
+        r.set(_hist_key(user_id, sid), json.dumps([], ensure_ascii=False))
+    _save_sessions_index(r, user_id, sessions)
+    r.set(_active_sess_key(user_id), sid)
+
+
+def _get_active_session_id(r, user_id: int) -> str:
+    _ensure_chat_sessions_structure(r, user_id)
+    raw = r.get(_active_sess_key(user_id))
+    if raw:
+        sid = raw.decode() if isinstance(raw, bytes) else str(raw)
+        if sid:
+            return sid
+    sessions = _load_sessions_index(r, user_id)
+    if sessions:
+        sid = str(sessions[0]["id"])
+        r.set(_active_sess_key(user_id), sid)
+        return sid
+    sid = uuid.uuid4().hex
+    r.set(_hist_key(user_id, sid), json.dumps([], ensure_ascii=False))
+    _save_sessions_index(
+        r,
+        user_id,
+        [{"id": sid, "title": "新对话", "preview": "", "updated": int(time.time())}],
+    )
+    r.set(_active_sess_key(user_id), sid)
+    return sid
+
+
+def _set_active_session(r, user_id: int, session_id: str) -> bool:
+    sessions = _load_sessions_index(r, user_id)
+    if not any(str(s.get("id")) == session_id for s in sessions):
+        return False
+    r.set(_active_sess_key(user_id), session_id)
+    return True
+
+
+def _load_messages(r, user_id: int, session_id: str) -> list:
+    raw = r.get(_hist_key(user_id, session_id))
     if not raw:
         return []
     try:
@@ -169,12 +268,48 @@ def _load_messages(r, user_id: int) -> list:
     return []
 
 
-def _save_messages(r, user_id: int, messages: list) -> None:
+def _save_messages(r, user_id: int, session_id: str, messages: list) -> None:
     s = get_settings()
     max_len = s.chat_history_max_messages
     if len(messages) > max_len:
         messages = messages[-max_len:]
-    r.set(_chat_history_key(user_id), json.dumps(messages, ensure_ascii=False))
+    r.set(_hist_key(user_id, session_id), json.dumps(messages, ensure_ascii=False))
+
+
+def _refresh_session_meta(
+    r, user_id: int, session_id: str, messages: list
+) -> None:
+    """更新左侧列表标题、预览与时间戳。"""
+    sessions = _load_sessions_index(r, user_id)
+    first_user = ""
+    for m in messages:
+        if isinstance(m, dict) and m.get("role") == "user":
+            c = m.get("content")
+            if isinstance(c, str) and c.strip():
+                first_user = c.strip()
+                break
+    last_preview = ""
+    if messages:
+        lm = messages[-1]
+        if isinstance(lm, dict):
+            c = lm.get("content")
+            if isinstance(c, str):
+                last_preview = c.strip()[:48]
+
+    changed = False
+    for s in sessions:
+        if str(s.get("id")) != session_id:
+            continue
+        if first_user and s.get("title") in ("新对话", "", None):
+            s["title"] = first_user[:24] + ("…" if len(first_user) > 24 else "")
+        if last_preview:
+            s["preview"] = last_preview
+        s["updated"] = int(time.time())
+        changed = True
+        break
+    if changed:
+        sessions.sort(key=lambda x: int(x.get("updated") or 0), reverse=True)
+        _save_sessions_index(r, user_id, sessions)
 
 
 SessionUser = dict[str, Any]
@@ -299,7 +434,13 @@ async def chat(
     if not allow(r, f"rl:chat:{uid}", settings.rate_limit_chat_per_minute):
         raise HTTPException(status_code=429, detail="对话请求过于频繁")
 
-    messages = _load_messages(r, uid)
+    if body.session_id:
+        sid_req = body.session_id.strip()
+        if not _set_active_session(r, uid, sid_req):
+            raise HTTPException(status_code=400, detail="无效的 session_id")
+
+    sess_id = _get_active_session_id(r, uid)
+    messages = _load_messages(r, uid, sess_id)
     messages.append({"role": "user", "content": body.message.strip()})
 
     try:
@@ -309,22 +450,79 @@ async def chat(
         raise HTTPException(status_code=500, detail=f"助手处理失败: {e!s}") from e
 
     messages.extend(delta)
-    _save_messages(r, uid, messages)
+    _save_messages(r, uid, sess_id, messages)
+    _refresh_session_meta(r, uid, sess_id, messages)
 
     reply = extract_assistant_text(delta)
     reply = rewrite_markdown_images(reply, settings.public_static_prefix)
-    return {"reply": reply}
+    return {"reply": reply, "session_id": sess_id}
 
 
 @app.post("/chat/clear")
 def clear_history(user: Annotated[SessionUser, Depends(get_session_user)]):
+    """清空当前会话消息（不删除会话条目，便于左侧历史仍存在）。"""
     r = get_redis()
-    r.delete(_chat_history_key(int(user["user_id"])))
+    uid = int(user["user_id"])
+    sess_id = _get_active_session_id(r, uid)
+    r.set(_hist_key(uid, sess_id), json.dumps([], ensure_ascii=False))
     return {"ok": True}
+
+
+@app.post("/chat/session/new")
+def chat_session_new(user: Annotated[SessionUser, Depends(get_session_user)]):
+    """新建会话并设为当前活跃；超过 10 条则丢弃最旧会话及其消息。"""
+    r = get_redis()
+    uid = int(user["user_id"])
+    _ensure_chat_sessions_structure(r, uid)
+    new_sid = uuid.uuid4().hex
+    sessions = _load_sessions_index(r, uid)
+    sessions.insert(
+        0,
+        {"id": new_sid, "title": "新对话", "preview": "", "updated": int(time.time())},
+    )
+    while len(sessions) > CHAT_SESSION_INDEX_MAX:
+        dropped = sessions.pop()
+        r.delete(_hist_key(uid, str(dropped["id"])))
+    _save_sessions_index(r, uid, sessions)
+    r.set(_hist_key(uid, new_sid), json.dumps([], ensure_ascii=False))
+    r.set(_active_sess_key(uid), new_sid)
+    return {"session_id": new_sid}
+
+
+@app.post("/chat/session/select")
+def chat_session_select(
+    body: ChatSessionSelectBody,
+    user: Annotated[SessionUser, Depends(get_session_user)],
+):
+    r = get_redis()
+    uid = int(user["user_id"])
+    _ensure_chat_sessions_structure(r, uid)
+    sid = body.session_id.strip()
+    if not _set_active_session(r, uid, sid):
+        raise HTTPException(status_code=404, detail="会话不存在")
+    return {"ok": True}
+
+
+@app.get("/chat/sessions")
+def chat_sessions_list(user: Annotated[SessionUser, Depends(get_session_user)]):
+    """左侧历史列表（最多 10 条），按更新时间倒序。"""
+    r = get_redis()
+    uid = int(user["user_id"])
+    _ensure_chat_sessions_structure(r, uid)
+    sessions = _load_sessions_index(r, uid)
+    sessions.sort(key=lambda x: int(x.get("updated") or 0), reverse=True)
+    _save_sessions_index(r, uid, sessions)
+    active = _get_active_session_id(r, uid)
+    return {"sessions": sessions, "active_session_id": active}
 
 
 @app.get("/chat/history")
 def chat_history(user: Annotated[SessionUser, Depends(get_session_user)]):
-    """供前端刷新后恢复 Redis 中保存的多轮对话（原始消息结构）。"""
+    """当前活跃会话的消息列表。"""
     r = get_redis()
-    return {"messages": _load_messages(r, int(user["user_id"]))}
+    uid = int(user["user_id"])
+    sess_id = _get_active_session_id(r, uid)
+    return {
+        "messages": _load_messages(r, uid, sess_id),
+        "session_id": sess_id,
+    }

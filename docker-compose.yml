@@ -2,8 +2,7 @@
 #
 # - Web 入口端口由 .env 中 CHATBI_HTTP_PORT / CHATBI_HTTPS_PORT 配置（勿占用其它业务已用端口）。
 # - 页面与 /api 由 nginx 提供；docker compose ps 默认不显示已退出容器，浏览器「连接被拒绝」时请 docker compose ps -a nginx。
-# - MySQL / Redis 默认仅在 Compose 网络内访问（不向宿主机映射端口），避免与 ECS 上其它中间件端口冲突。
-#   因此用 Navicat 填「ECS 公网 IP:3309」会连接被拒绝（10061），属预期；需 SSH 隧道或临时放开 ports（见 mysql 服务下注释）。
+# - MySQL / Redis 已映射宿主机端口（mysql 3309、redis 6381），便于本机工具调试；公网直连请务必收紧安全组与密码。
 # - 连接信息可在 .env 中手动配置：CHATBI_MYSQL_HOST、CHATBI_MYSQL_PORT、MYSQL_USER、MYSQL_PASSWORD、
 #   MYSQL_DATABASE、REDIS_URL（内置默认值见 .env.example）。
 # - 首次启动：MySQL 容器会自动执行 schema.sql、deploy/init-app.sql 完成库表初始化。
@@ -41,9 +40,8 @@ services:
       chatbi_internal:
         aliases:
           - mysql
-    # 默认不映射：外网 Navicat 直连公网 IP:3309 会失败。若必须远程连库（注意安全组与密码）：取消下行注释
-    # ports:
-    #   - "3309:3309"
+    ports:
+      - "3309:3309"
     healthcheck:
       test: ["CMD-SHELL", "MYSQL_PWD=$$MYSQL_ROOT_PASSWORD mysqladmin ping -h 127.0.0.1 -P3309 -uroot || exit 1"]
       interval: 10s
@@ -61,6 +59,8 @@ services:
         aliases:
           - redis
     command: ["redis-server", "--appendonly", "yes", "--port", "6381"]
+    ports:
+      - "6381:6381"
     healthcheck:
       test: ["CMD", "redis-cli", "-p", "6381", "ping"]
       interval: 5s

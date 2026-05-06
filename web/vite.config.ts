@@ -1,23 +1,38 @@
-import { defineConfig } from "vite";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { defineConfig, loadEnv } from "vite";
 import react from "@vitejs/plugin-react";
 
-/** 与 Docker Nginx 一致：浏览器请求 /api/*，转发到后端根路径（FastAPI 路由为 /auth、/chat 等） */
-const apiProxy = {
-  "/api": {
-    target: "http://127.0.0.1:8000",
-    changeOrigin: true,
-    rewrite: (path: string) => path.replace(/^\/api/, ""),
-  },
-};
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-export default defineConfig({
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** 仅路径型前缀走 dev/preview 代理；完整 http(s) URL 时不配置代理（由浏览器直连，需后端 CORS） */
+function buildApiProxy(mode: string) {
+  const env = loadEnv(mode, __dirname, "");
+  const raw = (env.VITE_API_PREFIX || "/api").trim().replace(/\/$/, "") || "/api";
+  if (/^https?:\/\//i.test(raw)) {
+    return {};
+  }
+  const p = raw.startsWith("/") ? raw : `/${raw}`;
+  return {
+    [p]: {
+      target: "http://127.0.0.1:8000",
+      changeOrigin: true,
+      rewrite: (reqPath: string) => reqPath.replace(new RegExp(`^${escapeRegExp(p)}`), ""),
+    },
+  };
+}
+
+export default defineConfig(({ mode }) => ({
   plugins: [react()],
   server: {
     port: 5173,
-    proxy: { ...apiProxy },
+    proxy: buildApiProxy(mode),
   },
-  // preview 不继承 server.proxy；本地 preview / 自定义端口（如 8881）无此项时 /api 会 404
   preview: {
-    proxy: { ...apiProxy },
+    proxy: buildApiProxy(mode),
   },
-});
+}));

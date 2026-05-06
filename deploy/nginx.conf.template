@@ -1,12 +1,10 @@
-# ChatBI 入口：静态资源 + /api 反代（80 与 443 行为一致，避免宿主机 18080/18443 映射时重定向错误）
-# 使用 upstream + proxy_pass 末尾 URI，稳定剥离 /api 前缀；变量 proxy_pass 与 rewrite 组合易触发上游异常
+# ChatBI 入口：静态资源 + /api 反代（超时与上游由容器环境变量注入，见 .env.example）
+# 仅占位符 ${CHATBI_API_UPSTREAM}、${CHATBI_NGINX_PROXY_TIMEOUT} 由 envsubst 替换；其余 $host 等保留给 Nginx
 
 upstream chatbi_api {
-    server api:8000;
+    server ${CHATBI_API_UPSTREAM};
     keepalive 32;
 }
-
-# 与 location 重复的共用片段通过两份 server 分别挂载（Alpine 默认 include 方式简单可靠）
 
 server {
     listen 80;
@@ -26,10 +24,11 @@ server {
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_connect_timeout 300s;
-        proxy_send_timeout 300s;
-        proxy_read_timeout 300s;
+        proxy_connect_timeout ${CHATBI_NGINX_PROXY_TIMEOUT};
+        proxy_send_timeout ${CHATBI_NGINX_PROXY_TIMEOUT};
+        proxy_read_timeout ${CHATBI_NGINX_PROXY_TIMEOUT};
         client_max_body_size 20m;
+        proxy_buffering off;
     }
 
     location / {
@@ -59,10 +58,11 @@ server {
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_connect_timeout 300s;
-        proxy_send_timeout 300s;
-        proxy_read_timeout 300s;
+        proxy_connect_timeout ${CHATBI_NGINX_PROXY_TIMEOUT};
+        proxy_send_timeout ${CHATBI_NGINX_PROXY_TIMEOUT};
+        proxy_read_timeout ${CHATBI_NGINX_PROXY_TIMEOUT};
         client_max_body_size 20m;
+        proxy_buffering off;
     }
 
     location / {

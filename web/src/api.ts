@@ -1,6 +1,14 @@
-/** 与网关同源，开发时 Vite 代理 /api 到后端 */
+/** 与网关同源；构建时由 VITE_API_PREFIX 配置（默认 /api），见根目录 .env.example */
 
-const prefix = "/api";
+function apiBase(): string {
+  const raw = (import.meta.env.VITE_API_PREFIX as string | undefined)?.trim();
+  if (!raw) return "/api";
+  const s = raw.replace(/\/$/, "");
+  if (/^https?:\/\//i.test(s)) return s;
+  return s.startsWith("/") ? s : `/${s}`;
+}
+
+const prefix = apiBase();
 
 /** 与后端 app/http_user_message.MSG_HTML_GATEWAY 语义一致 */
 const GATEWAY_ZH =

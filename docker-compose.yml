@@ -128,6 +128,13 @@ services:
       dockerfile: deploy/nginx.Dockerfile
       args:
         NPM_REGISTRY: "${NPM_REGISTRY:-https://registry.npmmirror.com}"
+        VITE_API_PREFIX: "${VITE_API_PREFIX:-/api}"
+    env_file:
+      - .env
+    environment:
+      # 网关反代：上游 API 地址（Compose 内一般为 api:8000）；超时对话助手时可增大 CHATBI_NGINX_PROXY_TIMEOUT（如 900s）
+      CHATBI_API_UPSTREAM: "${CHATBI_API_UPSTREAM:-api:8000}"
+      CHATBI_NGINX_PROXY_TIMEOUT: "${CHATBI_NGINX_PROXY_TIMEOUT:-600s}"
     ports:
       - "${CHATBI_HTTP_PORT:-18080}:80"
       - "${CHATBI_HTTPS_PORT:-18443}:443"

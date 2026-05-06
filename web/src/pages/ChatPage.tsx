@@ -12,6 +12,7 @@ import {
   apiSelectChatSession,
   ChatMessage,
   ChatSessionMeta,
+  sanitizeAssistantReply,
 } from "../api";
 import styles from "./ChatPage.module.css";
 
@@ -34,7 +35,8 @@ function toRows(messages: ChatMessage[]): Row[] {
     if (m.role !== "user" && m.role !== "assistant") continue;
     const c = m.content;
     if (typeof c !== "string") continue;
-    out.push({ role: m.role, text: c });
+    const text = m.role === "assistant" ? sanitizeAssistantReply(c) : c;
+    out.push({ role: m.role, text });
   }
   return out;
 }
@@ -48,6 +50,8 @@ export default function ChatPage() {
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  /** 用户一旦开始输入或发送，隐藏中部示例缓存区（与 rows 是否为空解耦，避免失败后缓存重新弹出） */
+  const [hideQuickPrompts, setHideQuickPrompts] = useState(false);
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
   const refreshSessions = useCallback(async () => {
@@ -70,7 +74,9 @@ export default function ChatPage() {
       setUsername(me.username);
       await refreshSessions();
       const hist = await apiChatHistory();
-      setRows(toRows(hist.messages || []));
+      const initialRows = toRows(hist.messages || []);
+      setRows(initialRows);
+      setHideQuickPrompts(initialRows.length > 0);
       if (hist.session_id) setActiveSessionId(hist.session_id);
     })();
   }, [nav, refreshSessions]);
@@ -90,6 +96,7 @@ export default function ChatPage() {
       const { session_id } = await apiNewChatSession();
       setActiveSessionId(session_id);
       setRows([]);
+      setHideQuickPrompts(false);
       await refreshSessions();
     } catch {
       setErr("新建会话失败");
@@ -103,7 +110,9 @@ export default function ChatPage() {
       await apiSelectChatSession(id);
       setActiveSessionId(id);
       const hist = await apiChatHistory();
-      setRows(toRows(hist.messages || []));
+      const nextRows = toRows(hist.messages || []);
+      setRows(nextRows);
+      setHideQuickPrompts(nextRows.length > 0);
       await refreshSessions();
     } catch {
       setErr("切换会话失败");
@@ -114,6 +123,7 @@ export default function ChatPage() {
     e?.preventDefault();
     const q = (presetText !== undefined ? presetText : input).trim();
     if (!q || sending) return;
+    setHideQuickPrompts(true);
     setInput("");
     setErr(null);
     setRows((r) => [...r, { role: "user", text: q }]);
@@ -125,13 +135,13 @@ export default function ChatPage() {
       await refreshSessions();
     } catch (ex) {
       setErr(ex instanceof Error ? ex.message : "发送失败");
-      setRows((r) => r.slice(0, -1));
     } finally {
       setSending(false);
     }
   }
 
-  const showPromptCache = rows.length === 0 && !input.trim() && !sending;
+  const showPromptCache =
+    !hideQuickPrompts && rows.length === 0 && !input.trim() && !sending;
 
   return (
     <div className={styles.layout}>
@@ -229,7 +239,11 @@ export default function ChatPage() {
                 rows={2}
                 value={input}
                 placeholder="输入股票相关问题…"
-                onChange={(e) => setInput(e.target.value)}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setInput(v);
+                  if (v.trim()) setHideQuickPrompts(true);
+                }}
                 onKeyDown={(e: KeyboardEvent<HTMLTextAreaElement>) => {
                   if (e.key === "Enter" && !e.shiftKey) {
                     e.preventDefault();
@@ -248,34 +262,13 @@ export default function ChatPage() {
         <aside className={styles.capPanel} aria-label="系统服务能力">
           <div className={styles.capTitle}>服务能力</div>
           <ul className={styles.capList}>
-            <li>
-              <strong>本地行情库</strong>
-              <span>MySQL「stock_daily」存储 A 股日线；助手优先查库作答。</span>
-            </li>
-            <li>
-              <strong>联网补数</strong>
-              <span>库中无数据时，通过 Tushare 拉取日线并写入数据库（需在服务端配置 TUSHARE_TOKEN）。</span>
-            </li>
-            <li>
-              <strong>SQL 与图表</strong>
-              <span>自然语言转 SQL、查询结果表格与自动走势图。</span>
-            </li>
-            <li>
-              <strong>ARIMA 预测</strong>
-              <span>基于近一年收盘价预测未来若干交易日（工具：arima_stock）。</span>
-            </li>
-            <li>
-              <strong>布林带</strong>
-              <span>20 日、2σ 超买超卖触点检测（工具：boll_detection）。</span>
-            </li>
-            <li>
-              <strong>Prophet</strong>
-              <span>趋势与季节性分解可视化（工具：prophet_analysis）。</span>
-            </li>
-            <li>
-              <strong>大模型</strong>
-              <span>通义千问编排工具调用；API Key：DASHSCOPE_API_KEY。</span>
-            </li>
+            <li>优先使用已落地的股票日线数据作答，响应更快、结果更稳定。</li>
+            <li>本地缺数据时可自动从外部行情源补齐，再继续回答您的问题。</li>
+            <li>用口语描述即可生成数据表格，并配上走势类图表便于阅读。</li>
+            <li>基于历史价格给出短期走向参考，适合辅助观察节奏。</li>
+            <li>从波动区间角度提示阶段性的相对偏高或偏低位置。</li>
+            <li>把长期走势拆成趋势与季节性等成分，并用图直观展示。</li>
+            <li>理解您的问题并调度上述能力，综合生成分析与说明。</li>
           </ul>
         </aside>
       </div>

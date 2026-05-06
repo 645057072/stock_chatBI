@@ -23,6 +23,7 @@ from app.db_schema import APP_USERS_CREATE_SQL
 from app.rate_limit import allow
 from app.redis_util import get_redis
 from app.paths import image_show_dir
+from app.http_user_message import sanitize_llm_reply_if_gateway_html
 from app.stock_bridge import rewrite_markdown_images, run_agent_turn
 
 
@@ -454,6 +455,7 @@ async def chat(
     _refresh_session_meta(r, uid, sess_id, messages)
 
     reply = extract_assistant_text(delta)
+    reply = sanitize_llm_reply_if_gateway_html(reply)
     reply = rewrite_markdown_images(reply, settings.public_static_prefix)
     return {"reply": reply, "session_id": sess_id}
 

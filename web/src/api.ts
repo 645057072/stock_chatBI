@@ -2,6 +2,34 @@
 
 const prefix = "/api";
 
+/** 与后端 app/http_user_message.MSG_HTML_GATEWAY 语义一致 */
+const GATEWAY_ZH =
+  "网关暂时无法连接后端服务，请稍后重试；若反复出现请联系管理员检查 API 与 Nginx 状态。";
+
+function looksLikeHtmlGateway(text: string): boolean {
+  const t = text.trim();
+  if (t.length < 24) return false;
+  if (!/<html\b/i.test(t) && !/<!doctype\s+html/i.test(t)) return false;
+  const lower = t.toLowerCase();
+  if (t.includes("502") || t.includes("504")) return true;
+  if (lower.includes("bad gateway") || lower.includes("gateway timeout") || lower.includes("gateway time-out"))
+    return true;
+  if (lower.includes("nginx/") && (t.includes("502") || t.includes("504"))) return true;
+  return false;
+}
+
+/** 对外展示的助手正文：屏蔽误混入的网关 HTML 页 */
+export function sanitizeAssistantReply(text: string): string {
+  if (looksLikeHtmlGateway(text)) return GATEWAY_ZH;
+  return text;
+}
+
+function humanizeHttpMessage(detail: string, status: number): string {
+  if (status === 502 || status === 503 || status === 504) return GATEWAY_ZH;
+  if (looksLikeHtmlGateway(detail)) return GATEWAY_ZH;
+  return detail;
+}
+
 function errDetail(data: unknown): string {
   if (data && typeof data === "object" && "detail" in data) {
     const d = (data as { detail: unknown }).detail;
@@ -29,7 +57,7 @@ export async function apiRegister(username: string, password: string) {
     body: JSON.stringify({ username, password }),
   });
   const data = await parseJson(res);
-  if (!res.ok) throw new Error(errDetail(data));
+  if (!res.ok) throw new Error(humanizeHttpMessage(errDetail(data), res.status));
 }
 
 export async function apiLogin(username: string, password: string) {
@@ -40,7 +68,7 @@ export async function apiLogin(username: string, password: string) {
     body: JSON.stringify({ username, password }),
   });
   const data = await parseJson(res);
-  if (!res.ok) throw new Error(errDetail(data));
+  if (!res.ok) throw new Error(humanizeHttpMessage(errDetail(data), res.status));
   return data;
 }
 
@@ -68,8 +96,10 @@ export async function apiChat(
     }),
   });
   const data = await parseJson(res);
-  if (!res.ok) throw new Error(errDetail(data));
-  return data as { reply: string; session_id?: string };
+  if (!res.ok) throw new Error(humanizeHttpMessage(errDetail(data), res.status));
+  const out = data as { reply: string; session_id?: string };
+  const reply = sanitizeAssistantReply(typeof out.reply === "string" ? out.reply : "");
+  return { ...out, reply };
 }
 
 /** 仅清空当前会话消息（保留会话条目） */
@@ -101,7 +131,7 @@ export async function apiNewChatSession(): Promise<{ session_id: string }> {
     credentials: "include",
   });
   const data = await parseJson(res);
-  if (!res.ok) throw new Error(errDetail(data));
+  if (!res.ok) throw new Error(humanizeHttpMessage(errDetail(data), res.status));
   return data as { session_id: string };
 }
 
@@ -113,7 +143,7 @@ export async function apiSelectChatSession(sessionId: string): Promise<void> {
     body: JSON.stringify({ session_id: sessionId }),
   });
   const data = await parseJson(res);
-  if (!res.ok) throw new Error(errDetail(data));
+  if (!res.ok) throw new Error(humanizeHttpMessage(errDetail(data), res.status));
 }
 
 export async function apiChatHistory(): Promise<{

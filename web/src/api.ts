@@ -92,9 +92,12 @@ export async function apiLogout() {
 }
 
 export async function apiMe(): Promise<{ user_id: number; username: string } | null> {
-  const res = await fetch(`${prefix}/auth/me`, { credentials: "include" });
+  const res = await fetch(`${prefix}/auth/session`, { credentials: "include" });
   if (!res.ok) return null;
-  return res.json();
+  const data = await parseJson(res);
+  const d = data as { logged_in?: boolean; user_id?: number; username?: string };
+  if (!d.logged_in || typeof d.user_id !== "number" || typeof d.username !== "string") return null;
+  return { user_id: d.user_id, username: d.username };
 }
 
 export async function apiChat(

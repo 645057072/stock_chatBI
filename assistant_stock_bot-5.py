@@ -1584,8 +1584,9 @@ def get_agent_bot() -> Assistant:
 def run_agent_turn(messages: list) -> list:
     """
     执行一轮对话：messages 末尾须已包含本轮用户消息。
-    返回与 bot.run 最后一次 yield 相同的增量列表，调用方应执行 messages.extend(增量)。
-    行为与 app_tui 中循环一致。
+    返回 bot.run 最后一次 yield 的增量列表（qwen-agent 在流式阶段会多次 yield，
+    合并全部会导致同一段 assistant 重复入库；最终 yield 已包含本轮完整消息）。
+    调用方应执行 messages.extend(返回值)。
     """
     bot = get_agent_bot()
     last_delta: list = []

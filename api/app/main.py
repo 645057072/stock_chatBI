@@ -26,6 +26,7 @@ from app.db_schema import APP_USERS_CREATE_SQL
 from app.rate_limit import allow
 from app.redis_util import get_redis
 from app.paths import image_show_dir
+from app.chat_reply_extract import extract_assistant_text
 from app.http_user_message import sanitize_llm_reply_if_gateway_html
 from app.stock_bridge import rewrite_markdown_images, run_agent_turn
 
@@ -175,22 +176,6 @@ def _client_ip(request: Request) -> str:
     if request.client:
         return request.client.host
     return "unknown"
-
-
-def extract_assistant_text(delta: list[Any]) -> str:
-    """从助手增量消息中提取 assistant 文本内容。"""
-    chunks: list[str] = []
-    for item in delta:
-        if not isinstance(item, dict):
-            continue
-        if item.get("role") != "assistant":
-            continue
-        c = item.get("content")
-        if isinstance(c, str):
-            chunks.append(c)
-        elif c is not None:
-            chunks.append(str(c))
-    return "\n\n".join(chunks) if chunks else "（无文本回复）"
 
 
 # 左侧历史会话最多保留条数（仅元数据列表；消息仍受 chat_history_max_messages 限制）
@@ -462,6 +447,29 @@ def me(user: Annotated[SessionUser, Depends(get_session_user)]):
     return {"user_id": user["user_id"], "username": user["username"]}
 
 
+@app.get("/auth/session")
+def auth_session(request: Request):
+    """探测登录态：始终 200，避免前端轮询时在控制台产生 401 噪声。"""
+    settings = get_settings()
+    sid = request.cookies.get(settings.session_cookie_name)
+    if not sid:
+        return {"logged_in": False}
+    raw = get_redis().get(f"sess:{sid}")
+    if not raw:
+        return {"logged_in": False}
+    try:
+        data = json.loads(raw)
+        if isinstance(data, dict) and "user_id" in data:
+            return {
+                "logged_in": True,
+                "user_id": int(data["user_id"]),
+                "username": str(data.get("username") or ""),
+            }
+    except (json.JSONDecodeError, TypeError, ValueError):
+        pass
+    return {"logged_in": False}
+
+
 @app.post("/chat")
 async def chat(
     request: Request,
@@ -496,6 +504,9 @@ async def chat(
     reply = extract_assistant_text(delta)
     reply = sanitize_llm_reply_if_gateway_html(reply)
     reply = rewrite_markdown_images(reply, settings.public_static_prefix)
+    reply = reply.strip() if isinstance(reply, str) else ""
+    if not reply:
+        reply = "（无文本回复）"
     return {"reply": reply, "session_id": sess_id}
 
 

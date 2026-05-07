@@ -158,6 +158,12 @@ class ChatSessionSelectBody(BaseModel):
     session_id: str = Field(..., min_length=8, max_length=64)
 
 
+class ChatUndoBody(BaseModel):
+    """从该下标起丢弃本条及之后所有消息（下标须对应一条 user 消息）。"""
+
+    from_index: int = Field(..., ge=0)
+
+
 _username_re = re.compile(r"^[a-zA-Z0-9_\u4e00-\u9fff]+$")
 
 
@@ -518,6 +524,30 @@ def clear_history(user: Annotated[SessionUser, Depends(get_session_user)]):
     sess_id = _get_active_session_id(r, uid)
     r.set(_hist_key(uid, sess_id), json.dumps([], ensure_ascii=False))
     return {"ok": True}
+
+
+@app.post("/chat/undo")
+def chat_undo_tail(
+    body: ChatUndoBody,
+    user: Annotated[SessionUser, Depends(get_session_user)],
+):
+    """从指定下标起撤销（含该条用户提问及其后的助手回复等），用于前端「撤销」。"""
+    r = get_redis()
+    uid = int(user["user_id"])
+    sess_id = _get_active_session_id(r, uid)
+    messages = _load_messages(r, uid, sess_id)
+    if body.from_index >= len(messages):
+        raise HTTPException(status_code=400, detail="撤销位置超出当前对话长度")
+    target = messages[body.from_index]
+    if not isinstance(target, dict) or target.get("role") != "user":
+        raise HTTPException(
+            status_code=400,
+            detail="只能从用户提问处撤销，请选中对应的用户气泡操作",
+        )
+    trimmed = messages[: body.from_index]
+    _save_messages(r, uid, sess_id, trimmed)
+    _refresh_session_meta(r, uid, sess_id, trimmed)
+    return {"ok": True, "messages": trimmed}
 
 
 @app.post("/chat/session/new")

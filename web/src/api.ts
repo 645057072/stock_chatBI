@@ -145,6 +145,20 @@ export async function apiClearChat() {
   await fetch(`${prefix}/chat/clear`, { method: "POST", credentials: "include" });
 }
 
+/** 从指定消息下标起丢弃本条及之后内容（下标须为用户消息，与 /chat/history 顺序一致） */
+export async function apiChatUndo(fromIndex: number): Promise<ChatMessage[]> {
+  const res = await fetch(`${prefix}/chat/undo`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({ from_index: fromIndex }),
+  });
+  const data = await parseJson(res);
+  if (!res.ok) throw new Error(humanizeHttpMessage(errDetail(data), res.status));
+  const out = data as { messages?: ChatMessage[] };
+  return Array.isArray(out.messages) ? out.messages : [];
+}
+
 export type ChatMessage = { role: string; content: string };
 
 export type ChatSessionMeta = {

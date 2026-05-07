@@ -6,6 +6,7 @@ import {
   apiChat,
   apiChatHistory,
   apiChatSessions,
+  apiChatUndo,
   apiLogout,
   apiMe,
   apiNewChatSession,
@@ -53,6 +54,8 @@ export default function ChatPage() {
   const [err, setErr] = useState<string | null>(null);
   /** 用户一旦开始输入或发送，隐藏中部示例缓存区（与 rows 是否为空解耦，避免失败后缓存重新弹出） */
   const [hideQuickPrompts, setHideQuickPrompts] = useState(false);
+  /** 助手请求进行中时已等待秒数（仅展示） */
+  const [thinkingSeconds, setThinkingSeconds] = useState(0);
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
   const refreshSessions = useCallback(async () => {
@@ -103,6 +106,19 @@ export default function ChatPage() {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [rows, sending]);
 
+  useEffect(() => {
+    if (!sending) {
+      setThinkingSeconds(0);
+      return;
+    }
+    const t0 = Date.now();
+    setThinkingSeconds(0);
+    const id = window.setInterval(() => {
+      setThinkingSeconds(Math.floor((Date.now() - t0) / 1000));
+    }, 300);
+    return () => window.clearInterval(id);
+  }, [sending]);
+
   async function onLogout() {
     await apiLogout();
     nav("/");
@@ -145,6 +161,39 @@ export default function ChatPage() {
       }
       setErr("切换会话失败");
     }
+  }
+
+  async function onUndoFromRow(rowIndex: number) {
+    if (sending) return;
+    const row = rows[rowIndex];
+    if (!row || row.role !== "user") return;
+    setErr(null);
+    try {
+      const msgs = await apiChatUndo(rowIndex);
+      setRows(toRows(msgs));
+      await refreshSessions();
+    } catch (ex) {
+      const msg = ex instanceof Error ? ex.message : "撤销失败";
+      setErr(msg);
+      if (msg === AUTH_EXPIRED_MESSAGE) nav("/");
+    }
+  }
+
+  async function onResendFromRow(rowIndex: number, text: string) {
+    if (sending || !text.trim()) return;
+    setErr(null);
+    try {
+      await apiChatUndo(rowIndex);
+      const hist = await apiChatHistory();
+      setRows(toRows(hist.messages || []));
+      await refreshSessions();
+    } catch (ex) {
+      const msg = ex instanceof Error ? ex.message : "重发前撤销失败";
+      setErr(msg);
+      if (msg === AUTH_EXPIRED_MESSAGE) nav("/");
+      return;
+    }
+    await onSend(undefined, text);
   }
 
   async function onSend(e?: FormEvent | KeyboardEvent, presetText?: string) {
@@ -241,7 +290,29 @@ export default function ChatPage() {
           {rows.map((row, i) =>
             row.role === "user" ? (
               <div key={i} className={styles.rowUser}>
-                <div className={styles.bubbleUser}>{row.text}</div>
+                <div className={styles.userBubbleCol}>
+                  <div className={styles.bubbleUser}>{row.text}</div>
+                  <div className={styles.userActions} aria-label="用户消息操作">
+                    <button
+                      type="button"
+                      className={styles.msgActionBtn}
+                      disabled={sending}
+                      title="撤销本条提问及之后的对话"
+                      onClick={() => void onUndoFromRow(i)}
+                    >
+                      撤销
+                    </button>
+                    <button
+                      type="button"
+                      className={styles.msgActionBtn}
+                      disabled={sending}
+                      title="删除本条及之后记录并重新发送该问题"
+                      onClick={() => void onResendFromRow(i, row.text)}
+                    >
+                      重发
+                    </button>
+                  </div>
+                </div>
               </div>
             ) : (
               <div key={i} className={styles.rowBot}>
@@ -256,7 +327,12 @@ export default function ChatPage() {
               </div>
             )
           )}
-          {sending ? <div className={styles.thinking}>助手思考中…</div> : null}
+          {sending ? (
+            <div className={styles.thinking} aria-live="polite">
+              助手思考中…
+              <span className={styles.thinkingTimer}>（已等待 {thinkingSeconds} 秒）</span>
+            </div>
+          ) : null}
           {err ? <div className={styles.feedErr}>{err}</div> : null}
           <div ref={bottomRef} />
         </div>
@@ -295,7 +371,7 @@ export default function ChatPage() {
         <div className={styles.capTitle}>服务能力</div>
         <ul className={styles.capList}>
           <li>优先使用已落地的股票日线数据作答，响应更快、结果更稳定。</li>
-          <li>本地缺数据或过旧时自动从外部行情源补齐，再继续回答。</li>
+          <li>本地缺数据或过旧时自动从外部行情源补齐（单只或多只股票均可），再继续回答，无需您手动点同步。</li>
           <li>用口语描述即可生成数据表格，并配上走势类图表便于阅读。</li>
           <li>基于历史价格给出短期走向参考，适合辅助观察节奏。</li>
           <li>从波动区间角度提示阶段性的相对偏高或偏低位置。</li>

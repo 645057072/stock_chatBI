@@ -17,10 +17,9 @@ server {
     location /api/ {
         resolver 127.0.0.11 ipv6=off valid=10s;
         resolver_timeout 5s;
-        # set 须在 rewrite break 之前，否则部分环境下变量未赋值即参与 proxy_pass，出现「invalid URL prefix in http://」
+        # 变量上游须 resolver；用 proxy_pass 尾部 / 去掉 /api/ 前缀，避免 rewrite+break 与变量组合在部分版本下偶发 502
         set $chatbi_upstream "${CHATBI_API_UPSTREAM}";
-        rewrite ^/api/(.*)$ /$1 break;
-        proxy_pass http://$chatbi_upstream;
+        proxy_pass http://$chatbi_upstream/;
         proxy_http_version 1.1;
         proxy_set_header Connection "";
         proxy_set_header Host $host;
@@ -32,6 +31,7 @@ server {
         proxy_read_timeout ${CHATBI_NGINX_PROXY_TIMEOUT};
         client_max_body_size 20m;
         proxy_buffering off;
+        proxy_buffer_size 16k;
     }
 
     location / {
@@ -56,10 +56,9 @@ server {
     location /api/ {
         resolver 127.0.0.11 ipv6=off valid=10s;
         resolver_timeout 5s;
-        # set 须在 rewrite break 之前，否则部分环境下变量未赋值即参与 proxy_pass，出现「invalid URL prefix in http://」
+        # 变量上游须 resolver；用 proxy_pass 尾部 / 去掉 /api/ 前缀，避免 rewrite+break 与变量组合在部分版本下偶发 502
         set $chatbi_upstream "${CHATBI_API_UPSTREAM}";
-        rewrite ^/api/(.*)$ /$1 break;
-        proxy_pass http://$chatbi_upstream;
+        proxy_pass http://$chatbi_upstream/;
         proxy_http_version 1.1;
         proxy_set_header Connection "";
         proxy_set_header Host $host;
@@ -71,6 +70,7 @@ server {
         proxy_read_timeout ${CHATBI_NGINX_PROXY_TIMEOUT};
         client_max_body_size 20m;
         proxy_buffering off;
+        proxy_buffer_size 16k;
     }
 
     location / {

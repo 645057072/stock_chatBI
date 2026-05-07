@@ -285,14 +285,53 @@
   margin-bottom: 16px;
 }
 
-.bubbleUser {
+.userBubbleCol {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
   max-width: 78%;
+  gap: 6px;
+  min-width: 0;
+}
+
+.bubbleUser {
+  width: 100%;
   padding: 12px 16px;
   border-radius: 16px 16px 4px 16px;
   background: #333;
   color: #f2f2f2;
   line-height: 1.5;
   font-size: 0.95rem;
+  box-sizing: border-box;
+  word-break: break-word;
+}
+
+.userActions {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.msgActionBtn {
+  padding: 4px 10px;
+  font-size: 0.75rem;
+  color: #9ab6e0;
+  background: #2a2f3a;
+  border: 1px solid #3d4a63;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.msgActionBtn:hover:not(:disabled) {
+  border-color: #4a7ac9;
+  color: #c8d8f0;
+}
+
+.msgActionBtn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .rowBot {
@@ -335,6 +374,12 @@
   color: #888;
   font-size: 0.85rem;
   margin-bottom: 12px;
+}
+
+.thinkingTimer {
+  margin-left: 6px;
+  font-variant-numeric: tabular-nums;
+  color: #6a7a9a;
 }
 
 .feedErr {

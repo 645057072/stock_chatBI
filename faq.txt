@@ -16,3 +16,6 @@ A3：
 Q4：统计某股票「本月」日均成交量
 A4：
 必须用本月日期区间：trade_date >= DATE_FORMAT(CURDATE(),'%Y-%m-01') AND trade_date <= CURDATE()；指标用 AVG(vol)（手）。不要用近一年数据答「本月」；不要把 COUNT(*) 或交易日天数说成成交量。本地无数据时 exc_sql 会自动尝试 Tushare 补库（需 token）。
+Q5：多只股票对比，本地库没有数据
+A5：
+只需正常写含多只 ts_code 的 SQL 调 exc_sql；服务端会按出现的代码逐只自动联网补数并重跑 SQL，不要让用户手动执行 sync_stock_daily 或确认是否同步。需配置 TUSHARE_TOKEN；单条 SQL 内解析到的代码数量有上限，过多时应分批。

@@ -119,7 +119,7 @@ CREATE TABLE stock_daily (
 6) 当用户要求“预测未来股价 / ARIMA / 未来 n 天”等时，必须调用 arima_stock 工具：参数 ts_code（必填）、n（预测交易日数量，必填）。不要手写预测数值。
 7) 当用户要求“布林带 / 超买超卖 / BOLL”等时，必须调用 boll_detection 工具：ts_code（必填）；start_date、end_date（可选，YYYY-MM-DD，默认近一年至今天）。**工具返回后必须原样粘贴全部内容（含「触点日期列表」行与表格），禁止自行改写、概括或另写一套日期。**
 8) 当用户要求“Prophet / 周期性分析 / trend weekly yearly”等时，必须调用 prophet_analysis：ts_code（必填）；start_date、end_date（可选，YYYY-MM-DD，默认近一年）。禁止手写趋势与季节性结论。
-9) **本地无数据时**：`exc_sql` 在 SQL 含**唯一**标准 **ts_code** 且已配置 **TUSHARE_TOKEN** 时，会在服务端**自动联网补数并重跑同一 SQL**，工具返回里会出现「已自动从网络同步」说明；此时**不要**再反复调用 **sync_stock_daily**（除非工具明确提示未配置 token 或无法识别代码）。用户口头说「从网络同步」时也可再调用 sync：ts_code 必填，start_date/end_date **留空**。**未配置 TUSHARE_TOKEN** 时须如实说明无法拉取，禁止编造行情。
+9) **本地无数据时**：`exc_sql` 在 SQL 中出现一只或多只标准 **ts_code**（同一 SQL 内解析到的列表）且已配置 **TUSHARE_TOKEN** 时，会在服务端**自动逐只联网补数并重跑同一 SQL**，无需用户确认是否同步；工具返回中含「按 SQL 中出现的证券代码自动尝试联网补数」。此时**不要**再让用户手动执行 **sync_stock_daily** 或粘贴 JSON 工具调用。**不要**因「多只股票」拒绝自动补库。**未配置 TUSHARE_TOKEN** 时须如实说明无法拉取，禁止编造行情。
 10) 用户说「近一年」「过去一年」「一年来」「最新一年」等**滚动窗口**时，SQL 必须使用 **DATE_SUB(CURDATE(), INTERVAL 1 YEAR)** 与 **trade_date <= CURDATE()** 界定区间；**禁止**随意写死如「2023-01-01 至 2024-01-01」这类与用户意图不符的旧年份，除非用户明确指定该历史年份区间。
 11) sync_stock_daily：**不要**自行把 end_date 写成往年某一天（会与「近一年 + CURDATE()」查询错位）；日期参数优先省略。若 Tushare 拉取结果为 0 条，应向用户说明可能原因：代码错误、该股未在 A 股上市/已退市无日线、或接口权限/积分不足——**不可**反复同步同一 ts_code。
 12) 当用户**同一轮问题**中同时要求布林带（超买/超卖/BOLL）与「预测未来股价 / ARIMA / 未来 n 天」时，须**依次**调用：先 **boll_detection**（完整输出），再 **arima_stock**（同一 ts_code、用户指定的预测天数 n）；两次工具返回的表格与图片均须**原样完整**出现在答复中，禁止只保留其中一次结果。
@@ -155,7 +155,7 @@ CREATE TABLE stock_daily (
 functions_desc = [
     {
         "name": "exc_sql",
-        "description": "执行 SQL 查询（MySQL），返回结果表格并自动可视化",
+        "description": "执行 SQL 查询（MySQL），返回结果表格并自动可视化；若结果为空且 SQL 含标准 ts_code，服务端会按代码自动逐只联网补库（支持多只）后重试，无需用户手动确认或 sync_stock_daily",
         "parameters": {
             "type": "object",
             "properties": {
@@ -843,50 +843,61 @@ def _refresh_stale_price_window_if_needed(
     return df2, note
 
 
+# exc_sql 查询为空时，按 SQL 中出现的代码自动拉取日线之上限（防止超大 IN 列表刷接口）
+_AUTO_SYNC_MAX_CODES = 20
+
+
 def _auto_sync_when_empty(sql_input: str, engine) -> tuple[Optional[pd.DataFrame], str]:
     """
-    本地查询无行且 SQL 中仅出现一只 ts_code 时，自动从 Tushare 补写日线并重跑同一 SQL。
-    不在此路径询问用户是否同步，由服务端直接补数。
+    本地查询无行且 SQL 中含标准 ts_code 时，按代码逐只从 Tushare 补写日线后重跑同一 SQL。
+    支持一只或多只证券；不向用户索要确认，由服务端直接补数。
     """
     if not tushare_token:
         return None, ""
     codes = _extract_ts_codes_from_sql(sql_input)
-    if len(codes) != 1:
+    if not codes:
         return None, ""
-    ts_code = codes[0]
+    if len(codes) > _AUTO_SYNC_MAX_CODES:
+        return None, (
+            f"> **自动联网补数**：SQL 中解析到 **{len(codes)}** 只证券代码，超过上限 {_AUTO_SYNC_MAX_CODES}，"
+            f"已跳过自动补库以免过量请求接口；请改写为更小范围的 ts_code 列表或分批查询。\n\n"
+        )
+
     today = date.today()
     start_d = today - timedelta(days=730)
-    try:
-        n, stock_name = _upsert_stock_daily_from_tushare(ts_code, start_d, today)
-    except Exception as e:
-        return None, (
-            f"> **自动联网补数失败**：{type(e).__name__}: {e}\n\n"
-            f"> 请检查 **TUSHARE_TOKEN** 与网络；并请用户核对 **{ts_code}** 是否已上市、代码是否正确。\n\n"
-        )
-    if n == 0:
-        return None, (
-            f"> **自动联网补数**：已向接口请求 **{ts_code}**（{stock_name}）日线，返回 **0** 条。\n\n"
-            "> 请如实告知用户：**未查询到该证券可用日线数据**，请确认是否已在沪深北交所上市、代码是否正确，或接口权限/积分是否足够。\n\n"
-        )
-    note = (
-        f"> **说明**：本地查询为空，已**自动**从网络同步 **{stock_name}**（`{ts_code}`）日线 **{n}** 条并重跑同一 SQL。\n\n"
-    )
+    lines: list[str] = [
+        "> **说明**：本地查询为空，已按 SQL 中出现的证券代码**自动**尝试联网补数（无需用户手动确认）。\n"
+    ]
+    for ts_code in codes:
+        try:
+            n, stock_name = _upsert_stock_daily_from_tushare(ts_code, start_d, today)
+        except Exception as e:
+            lines.append(f"> - **`{ts_code}`** 补数失败：{type(e).__name__}: {e}\n")
+            continue
+        if n == 0:
+            lines.append(
+                f"> - **`{ts_code}`**（{stock_name}）：接口返回 **0** 条日线（可能未上市、代码错误或权限不足）。\n"
+            )
+        else:
+            lines.append(f"> - **`{ts_code}`**（{stock_name}）：已写入 **{n}** 条日线。\n")
+
+    note = "".join(lines) + "\n"
     try:
         df2 = pd.read_sql(text(sql_input), engine)
     except Exception as e:
-        return None, note + f"> 同步后重跑 SQL 失败：{type(e).__name__}: {e}\n\n"
-    if df2 is None or df2.empty:
-        return None, note + (
-            "> 同步后查询仍为空：请核对 SQL 条件（日期区间、WHERE 字段）是否与用户问题一致。\n\n"
-        )
-    return df2, note
+        return None, note + f"> 补数后重跑 SQL 失败：{type(e).__name__}: {e}\n\n"
+    if df2 is not None and not df2.empty:
+        return df2, note
+    return None, note + (
+        "> 补数后重查仍无数据行：请核对 SQL 与用户问题（日期区间、WHERE 条件），并如实告知用户缺数据原因；禁止编造行情。\n\n"
+    )
 
 
 @register_tool("exc_sql")
 class ExcSQLTool(BaseTool):
     """SQL 查询工具：执行 MySQL SQL 并返回 markdown + 图表。"""
 
-    description = "执行 SQL 查询（MySQL），返回结果并自动可视化"
+    description = "执行 SQL 查询（MySQL），返回结果并自动可视化；空结果时按 SQL 中 ts_code 自动联网补库（可多只）后重试"
     parameters = [
         {
             "name": "sql_input",
@@ -929,25 +940,26 @@ class ExcSQLTool(BaseTool):
                 if not tushare_token:
                     parts.append(
                         "查询结果为空；**未配置 TUSHARE_TOKEN**，无法自动联网补数。"
-                        "配置后可重试；或请用户提供正确 **ts_code** 后由助手调用 sync_stock_daily。"
+                        "配置后可重试。**勿**要求用户手动粘贴 sync_stock_daily 的 JSON。"
                         "若持续无数据，请用户核对证券是否已在沪深北交所上市。"
                     )
-                codes_in_sql = _extract_ts_codes_from_sql(sql_input)
-                if len(codes_in_sql) == 0:
-                    parts.append(
-                        "查询结果为空；当前 SQL 未包含可识别的标准 **ts_code**（如 000001.SZ），"
-                        "无法自动联网补库。请改写 SQL 含 `ts_code='xxxxxx.SH|SZ|BJ'` 后再执行。"
-                    )
-                elif len(codes_in_sql) > 1:
-                    parts.append(
-                        "查询结果为空；SQL 中出现多只证券代码，**不会**自动联网补库（避免误同步）。"
-                        "请使用 **sync_stock_daily** 逐只补数后重试，或拆分 SQL 为单只 ts_code。"
-                    )
                 else:
-                    parts.append(
-                        "查询结果为空；已尝试自动联网补数仍无匹配数据。"
-                        "请如实告知用户：无法提供该条件下的行情，并请核对代码、上市状态及 SQL 是否与问题一致（勿编造数值）。"
-                    )
+                    codes_in_sql = _extract_ts_codes_from_sql(sql_input)
+                    if len(codes_in_sql) == 0:
+                        parts.append(
+                            "查询结果为空；当前 SQL 未包含可识别的标准 **ts_code**（如 000001.SZ），"
+                            "无法自动联网补库。请改写 SQL 含 `ts_code='xxxxxx.SH|SZ|BJ'` 后再执行。"
+                        )
+                    elif not (sync_note and sync_note.strip()):
+                        parts.append(
+                            "查询结果为空；自动补库未产生说明（异常）；请检查环境与 SQL。"
+                            "请如实告知用户无法给出该条件下的数据，勿编造数值。"
+                        )
+                    else:
+                        parts.append(
+                            "查询仍无数据行；请结合上文「自动补数」说明向用户解释（可多只股票均已尝试），"
+                            "核对 SQL 日期与条件；勿要求用户再手动同步。"
+                        )
                 return "\n\n".join(p for p in parts if p)
 
         if df is not None and not df.empty:

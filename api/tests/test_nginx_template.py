@@ -17,22 +17,24 @@ def test_nginx_template_has_envsubst_placeholders():
     assert "$host" in text
     # 动态解析上游，避免 api 容器重建后旧 IP 导致 502
     assert "resolver 127.0.0.11" in text
-    assert "rewrite ^/api/(.*)$ /$1 break;" not in text
+    assert "rewrite ^/api/(.*)$ /$1 break;" in text
     assert 'set $chatbi_upstream "${CHATBI_API_UPSTREAM}"' in text
-    assert "proxy_pass http://$chatbi_upstream/;" in text
+    assert "proxy_pass http://$chatbi_upstream;" in text
+    assert "proxy_pass http://$chatbi_upstream/;" not in text
     assert "upstream chatbi_api" not in text
 
 
-def test_api_location_set_upstream_before_proxy_pass():
-    """set 须在 proxy_pass 之前，避免变量未初始化。"""
+def test_api_location_order_set_rewrite_proxy_pass():
+    """set → rewrite → proxy_pass，避免变量未初始化且保证去掉 /api 前缀。"""
     p = _repo_root() / "deploy" / "nginx.conf.template"
     text = p.read_text(encoding="utf-8")
     pos = 0
     for _ in range(2):
         s = text.find("set $chatbi_upstream", pos)
-        r = text.find("proxy_pass http://$chatbi_upstream/", pos)
-        assert s != -1 and r != -1, "每个 server 块须含 set 与 proxy_pass"
-        assert s < r
+        rw = text.find("rewrite ^/api/", pos)
+        r = text.find("proxy_pass http://$chatbi_upstream;", pos)
+        assert s != -1 and rw != -1 and r != -1, "每个 server 块须含 set、rewrite、proxy_pass"
+        assert s < rw < r
         pos = r + 10
 
 
@@ -44,7 +46,7 @@ def test_substituted_upstream_literal_nonempty():
         "${CHATBI_NGINX_PROXY_TIMEOUT}", "600s"
     )
     assert 'set $chatbi_upstream "api:8000"' in out
-    assert 'proxy_pass http://$chatbi_upstream/;' in out
+    assert 'proxy_pass http://$chatbi_upstream;' in out
 
 
 def test_nginx_entrypoint_exists():

@@ -2,9 +2,14 @@
   display: flex;
   flex-direction: row;
   width: 100%;
-  min-height: 100vh;
+  /* 锁定视口高度，避免整页随对话变长滚动；仅中间消息区与侧栏会话列表内部滚动 */
+  height: 100%;
+  max-height: 100vh;
+  max-height: 100dvh;
+  min-height: 0;
   align-items: stretch;
   background: #1a1a1a;
+  overflow: hidden;
 }
 
 /* 左 20% | 中间自适应占满剩余宽度 | 右 20% 服务能力贴齐视口右缘，避免嵌套 flex 子项 60%+20% 留下缝隙 */
@@ -14,7 +19,8 @@
   width: 20%;
   max-width: 20%;
   min-width: 0;
-  min-height: 100vh;
+  height: 100%;
+  min-height: 0;
   align-self: stretch;
   box-sizing: border-box;
   display: flex;
@@ -22,6 +28,7 @@
   padding: 16px 10px;
   background: #222;
   border-right: 1px solid #2e2e2e;
+  overflow: hidden;
 }
 
 .brand {
@@ -103,6 +110,7 @@
 }
 
 .userBox {
+  flex-shrink: 0;
   padding: 12px 10px;
   border-top: 1px solid #333;
 }
@@ -126,9 +134,11 @@
 .main {
   flex: 1 1 0;
   min-width: 0;
-  min-height: 100vh;
+  min-height: 0;
+  height: 100%;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 
 .capPanel {
@@ -136,13 +146,14 @@
   width: 20%;
   max-width: 20%;
   min-width: 0;
-  min-height: 100vh;
+  height: 100%;
+  min-height: 0;
   align-self: stretch;
   box-sizing: border-box;
   padding: 0;
   background: #222;
   border-left: 1px solid #2e2e2e;
-  overflow-y: auto;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
   align-items: stretch;
@@ -169,6 +180,7 @@
   width: 100%;
   box-sizing: border-box;
   min-height: 0;
+  overflow-y: auto;
 }
 
 .capList li {
@@ -201,9 +213,11 @@
 }
 
 .feed {
-  flex: 1;
+  flex: 1 1 0;
+  min-height: 0;
   overflow-y: auto;
-  padding: 20px 24px 120px;
+  overflow-x: hidden;
+  padding: 20px 24px 16px;
 }
 
 .placeholder {
@@ -331,7 +345,7 @@
 .footer {
   flex-shrink: 0;
   padding: 12px 20px 16px;
-  background: linear-gradient(180deg, transparent, #1a1a1a 28%);
+  background: #1a1a1a;
   border-top: 1px solid #2a2a2a;
 }
 

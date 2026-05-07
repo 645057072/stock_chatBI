@@ -5,7 +5,11 @@ import pandas as pd
 
 from app.stock_display import (
     axis_label_zh,
+    comparison_numeric_describe_blocks,
+    format_comparison_describe_markdown,
+    prepare_dataframe_for_markdown,
     rename_dataframe_columns_zh,
+    resolve_dataframe_column,
     stock_name_needs_resolve,
 )
 
@@ -37,3 +41,34 @@ def test_rename_dataframe_columns_zh_partial():
 def test_axis_label_zh_known_and_fallback():
     assert axis_label_zh("trade_date") == "交易日期"
     assert axis_label_zh("custom_metric") == "custom_metric"
+
+
+def test_resolve_dataframe_column_case_insensitive():
+    df = pd.DataFrame({"TS_CODE": ["600519.SH"], "Close_Price": [1.0]})
+    assert resolve_dataframe_column(df, "ts_code") == "TS_CODE"
+    assert resolve_dataframe_column(df, "close_price") == "Close_Price"
+
+
+def test_prepare_dataframe_for_markdown_avoids_scientific_notation():
+    df = pd.DataFrame({"vol": [1216390.0], "close_price": [13.5]})
+    out = prepare_dataframe_for_markdown(df)
+    assert "e+" not in str(out.iloc[0]["vol"]).lower()
+    assert "," in str(out.iloc[0]["vol"])
+
+
+def test_comparison_numeric_describe_blocks_splits_by_ts():
+    df = pd.DataFrame(
+        {
+            "ts_code": ["688981.SH", "688981.SH", "600271.SH", "600271.SH"],
+            "stock_name": ["中芯国际", "中芯国际", "航天信息", "航天信息"],
+            "close_price": [10.0, 12.0, 20.0, 18.0],
+        }
+    )
+    blocks = comparison_numeric_describe_blocks(df, "ts_code", ["close_price"])
+    assert len(blocks) == 2
+    titles = [b[0] for b in blocks]
+    assert any("688981" in t for t in titles)
+    assert any("600271" in t for t in titles)
+    md = format_comparison_describe_markdown(blocks)
+    assert "688981" in md or "中芯国际" in md
+    assert "600271" in md or "航天信息" in md

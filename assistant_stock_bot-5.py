@@ -57,7 +57,16 @@ def _ensure_api_pkg_path() -> None:
 _ensure_api_pkg_path()
 from app.matplotlib_cn import configure_matplotlib_fonts
 from app.sql_guard import validate_exc_sql_or_raise
-from app.stock_display import axis_label_zh, rename_dataframe_columns_zh, stock_name_needs_resolve
+from app.stock_display import (
+    axis_label_zh,
+    comparison_numeric_describe_blocks,
+    format_comparison_describe_markdown,
+    normalize_ts_code_series,
+    prepare_dataframe_for_markdown,
+    rename_dataframe_columns_zh,
+    resolve_dataframe_column,
+    stock_name_needs_resolve,
+)
 
 from chatbi_mysql_env import stock_mysql_params
 
@@ -106,16 +115,18 @@ CREATE TABLE stock_daily (
 2) SQL 只能查询 stock_daily 表（禁止引用其它表/视图/CTE 里不存在的表名），字段必须来自上面的表结构。
 3) 若用户问“某年/某月是否有数据”，先用 SQL 查询该股票/范围的 MIN(trade_date)、MAX(trade_date) 或 COUNT(*) 来确认。
 4) 输出时：当 exc_sql 返回 markdown 表格/图片时，必须原样输出工具返回的全部内容（包括图片 markdown），不要省略。
-5) 写 SQL 时尽量包含 stock_name（若用户 SQL 未选 stock_name，工具会自动补全，但你仍优先在 SQL 里显式选择 stock_name）。
+5) 写 SQL 时尽量包含 stock_name（若用户 SQL 未选 stock_name，工具会自动补全，但你仍优先在 SQL 里显式选择 stock_name）。**多只股票对比**时 SELECT **必须**含 **ts_code**（不可省略），否则无法按证券分别生成描述统计与多条对比曲线。
 6) 当用户要求“预测未来股价 / ARIMA / 未来 n 天”等时，必须调用 arima_stock 工具：参数 ts_code（必填）、n（预测交易日数量，必填）。不要手写预测数值。
 7) 当用户要求“布林带 / 超买超卖 / BOLL”等时，必须调用 boll_detection 工具：ts_code（必填）；start_date、end_date（可选，YYYY-MM-DD，默认近一年至今天）。**工具返回后必须原样粘贴全部内容（含「触点日期列表」行与表格），禁止自行改写、概括或另写一套日期。**
 8) 当用户要求“Prophet / 周期性分析 / trend weekly yearly”等时，必须调用 prophet_analysis：ts_code（必填）；start_date、end_date（可选，YYYY-MM-DD，默认近一年）。禁止手写趋势与季节性结论。
-9) 当 exc_sql 返回「查询结果为空」且涉及具体股票（含 ts_code 或可映射到 ts_code）时，或用户明确要求从网络同步/下载/更新行情时，**最多调用一次** sync_stock_daily：ts_code（必填，如 600519.SH）；start_date、end_date 一般**留空**由工具默认（约两年前至今天）。**禁止**在已成功同步且工具返回里已给出复查 SQL 的情况下再次调用 sync_stock_daily（浪费 token）。成功写入后**只调用一次** exc_sql 按返回中的 SQL 复查。**未配置 TUSHARE_TOKEN 时须如实说明无法拉取，禁止编造行情。**
+9) **本地无数据时**：`exc_sql` 在 SQL 含**唯一**标准 **ts_code** 且已配置 **TUSHARE_TOKEN** 时，会在服务端**自动联网补数并重跑同一 SQL**，工具返回里会出现「已自动从网络同步」说明；此时**不要**再反复调用 **sync_stock_daily**（除非工具明确提示未配置 token 或无法识别代码）。用户口头说「从网络同步」时也可再调用 sync：ts_code 必填，start_date/end_date **留空**。**未配置 TUSHARE_TOKEN** 时须如实说明无法拉取，禁止编造行情。
 10) 用户说「近一年」「过去一年」「一年来」「最新一年」等**滚动窗口**时，SQL 必须使用 **DATE_SUB(CURDATE(), INTERVAL 1 YEAR)** 与 **trade_date <= CURDATE()** 界定区间；**禁止**随意写死如「2023-01-01 至 2024-01-01」这类与用户意图不符的旧年份，除非用户明确指定该历史年份区间。
 11) sync_stock_daily：**不要**自行把 end_date 写成往年某一天（会与「近一年 + CURDATE()」查询错位）；日期参数优先省略。若 Tushare 拉取结果为 0 条，应向用户说明可能原因：代码错误、该股未在 A 股上市/已退市无日线、或接口权限/积分不足——**不可**反复同步同一 ts_code。
 12) 当用户**同一轮问题**中同时要求布林带（超买/超卖/BOLL）与「预测未来股价 / ARIMA / 未来 n 天」时，须**依次**调用：先 **boll_detection**（完整输出），再 **arima_stock**（同一 ts_code、用户指定的预测天数 n）；两次工具返回的表格与图片均须**原样完整**出现在答复中，禁止只保留其中一次结果。
+13) **证券识别与代码校验**：用户给出的名称或代码**不明确、错误或与多只证券混淆**时（例如仅「贵州的股票」「本省龙头」、简称可能对应多只股票、代码不是 **6 位数字+.SH/.SZ/.BJ**、或少写交易所后缀），**禁止**擅自选定某一只证券（尤其禁止默认知名股票如贵州茅台）并调用 exc_sql / sync_stock_daily / arima_stock / boll_detection / prophet_analysis；**禁止**编造 ts_code。此时**仅输出文字**：说明无法唯一确定标的或格式不对，并请用户提供**准确的标准证券代码**（如 600519.SH）或与库内一致的**完整股票简称**，确认后再查询。仅当用户已给出**可唯一对应**的 ts_code（格式正确）或经你判断**无歧义**的单一简称时，方可调用工具拉数。
+14) **意图与结果一致（禁止答非所问）**：答复必须严格对应 exc_sql 返回表的**列名与数值**，结合用户问法解释（单位：`vol` 为**手**，价格为**元**）。**禁止**把样本条数、`describe` 的 **count**、`COUNT(*)` 或统计区间内的**交易日个数**说成「成交量」「日均成交量」。用户问「**本月**日均成交量」时，SQL 须用 **`AVG(vol)`**，且日期限定 **`trade_date >= DATE_FORMAT(CURDATE(), '%Y-%m-01') AND trade_date <= CURDATE()`**；不得用「近一年」SQL 的结果回答「本月」问题。工具返回的表格已格式化为易读数字，**禁止**自行改写或捏造与表不符的结论。
 
-你需要根据用户问题生成 SQL（MySQL 方言）并调用 exc_sql 工具执行，返回查询结果；预测类问题调用 arima_stock；布林带检测调用 boll_detection；周期性分析调用 prophet_analysis；**本地无数据时先 sync_stock_daily 再查库**。
+你需要根据用户问题生成 SQL（MySQL 方言）并调用 exc_sql 工具执行，返回查询结果；预测类问题调用 arima_stock；布林带检测调用 boll_detection；周期性分析调用 prophet_analysis；**本地无数据时 exc_sql 会自动尝试联网补数（见规则 9）**。
 
 常用查询示例（按需选择）：
 - 某只股票「近一年」收盘价走势（必须用 CURDATE，勿写死往年）：
@@ -130,6 +141,13 @@ CREATE TABLE stock_daily (
   WHERE ...
   GROUP BY month, ts_code
   ORDER BY month, ts_code;
+- **本月**日均成交量（示例：平安银行，勿用 COUNT 代替 AVG(vol)）：
+  SELECT ts_code, stock_name, AVG(vol) AS avg_daily_vol_hand, COUNT(*) AS trading_days_in_month
+  FROM stock_daily
+  WHERE ts_code='000001.SZ'
+    AND trade_date >= DATE_FORMAT(CURDATE(), '%Y-%m-01')
+    AND trade_date <= CURDATE()
+  GROUP BY ts_code, stock_name;
 
 重要：每当 exc_sql / arima_stock / boll_detection / prophet_analysis 工具返回 markdown 表格和图片时，你必须原样输出工具返回的全部内容（包括图片 markdown），不要只总结表格，也不要省略图片。"""
 
@@ -319,8 +337,8 @@ def _markdown_image(path_rel: str) -> str:
 
 
 def _extract_ts_codes_from_sql(sql_text: str) -> list[str]:
-    """从 SQL 文本中提取证券代码（如 600519.SH）。"""
-    codes = re.findall(r"\b\d{6}\.(?:SH|SZ)\b", sql_text.upper())
+    """从 SQL 文本中提取证券代码（如 600519.SH、920001.BJ）。"""
+    codes = re.findall(r"\b\d{6}\.(?:SH|SZ|BJ)\b", sql_text.upper())
     # 保序去重
     uniq = list(dict.fromkeys(codes))
     return uniq
@@ -463,17 +481,21 @@ def _display_name_for_ts_code(ts_code: str, db_name: object) -> str:
 
 
 def _plot_legend_label(sub: pd.DataFrame, group_key: object, group_col: Optional[str]) -> str:
-    """折线图图例：优先「简称 (证券代码)」。"""
-    if group_col == "stock_name":
+    """折线图图例：优先「简称 (证券代码)」（列名不区分大小写）。"""
+    cols_lower = {str(c).lower(): c for c in sub.columns}
+    ts_actual = cols_lower.get("ts_code")
+    sn_actual = cols_lower.get("stock_name")
+    if group_col is not None and str(group_col).lower() == str(sn_actual or "").lower():
         return str(group_key)
-    if "ts_code" in sub.columns:
-        tc = str(sub["ts_code"].iloc[-1]).strip()
-        sn = sub["stock_name"].iloc[-1] if "stock_name" in sub.columns else None
+    if ts_actual:
+        tc_raw = str(sub[ts_actual].iloc[-1]).strip()
+        tc = normalize_ts_code_series(pd.Series([tc_raw])).iloc[0]
+        sn = sub[sn_actual].iloc[-1] if sn_actual else None
         if not stock_name_needs_resolve(sn, tc):
             return f"{str(sn).strip()} ({tc})"
-        return tc
-    if "stock_name" in sub.columns:
-        return str(sub["stock_name"].iloc[-1])
+        return str(tc)
+    if sn_actual:
+        return str(sub[sn_actual].iloc[-1])
     return str(group_key) if group_key is not None else ""
 
 
@@ -659,7 +681,9 @@ def _realtime_block_for_codes(ts_codes: list[str]) -> str:
         regex=True,
     )
     out = "### 实时交易补充（Tushare 最近交易日）\n\n"
-    out += rename_dataframe_columns_zh(rdf.copy()).to_markdown(index=False, tablefmt="github")
+    out += rename_dataframe_columns_zh(prepare_dataframe_for_markdown(rdf.copy())).to_markdown(
+        index=False, tablefmt="github"
+    )
     out += "\n\n> 该部分用于补充实时交易日期与行情，不替代 MySQL 历史回测口径。\n"
     return out
 
@@ -673,12 +697,12 @@ def generate_chart_png(df_sql: pd.DataFrame, save_path: str) -> None:
     df = df_sql.copy()
     cols = [str(c) for c in df.columns.tolist()]
 
-    # 尝试识别日期列
-    date_col = None
-    for c in cols:
-        if c.lower() in ("trade_date", "date", "day"):
-            date_col = c
-            break
+    # 尝试识别日期列（列名不区分大小写）
+    date_col = resolve_dataframe_column(df, "trade_date")
+    if date_col is None:
+        date_col = resolve_dataframe_column(df, "date")
+    if date_col is None:
+        date_col = resolve_dataframe_column(df, "day")
     if date_col is None:
         # 第一列可转 datetime 也认为是日期
         c0 = cols[0]
@@ -688,12 +712,18 @@ def generate_chart_png(df_sql: pd.DataFrame, save_path: str) -> None:
         except Exception:
             date_col = None
 
-    # 多证券对比：优先按 ts_code 分组，图例用证券简称
+    ts_col = resolve_dataframe_column(df, "ts_code")
+    stock_name_col = resolve_dataframe_column(df, "stock_name")
+    if ts_col is not None:
+        df = df.copy()
+        df[ts_col] = normalize_ts_code_series(df[ts_col])
+
+    # 多证券对比：必须按证券分组分别排序再绘制，否则会把多只股票按日期交错连成一条线（出现虚假尖峰）
     group_col = None
-    if "ts_code" in df.columns and df["ts_code"].nunique() > 1:
-        group_col = "ts_code"
-    elif "stock_name" in df.columns and df["stock_name"].nunique() > 1:
-        group_col = "stock_name"
+    if ts_col is not None and df[ts_col].nunique() > 1:
+        group_col = ts_col
+    elif stock_name_col is not None and df[stock_name_col].nunique() > 1:
+        group_col = stock_name_col
 
     # 识别数值列（优先 close_price）
     num_cols = df.select_dtypes(include=[np.number]).columns.tolist()
@@ -710,19 +740,20 @@ def generate_chart_png(df_sql: pd.DataFrame, save_path: str) -> None:
     if date_col is not None and y_col is not None:
         # 时间序列折线图（支持多 ts_code 对比）
         df[date_col] = pd.to_datetime(df[date_col])
-        df = df.sort_values(date_col)
         if group_col is not None and group_col in df.columns and df[group_col].nunique() <= 10:
-            for g, sub in df.groupby(group_col):
+            for g, sub in df.groupby(group_col, sort=True):
+                sub = sub.sort_values(date_col)
                 lbl = _plot_legend_label(sub, g, group_col)
                 plt.plot(sub[date_col], sub[y_col], label=lbl)
             plt.legend()
             plt.title("多证券收盘价对比走势")
         else:
-            if "ts_code" in df.columns:
-                lbl = _plot_legend_label(df, None, None)
+            df_single = df.sort_values(date_col)
+            if ts_col is not None and ts_col in df_single.columns:
+                lbl = _plot_legend_label(df_single, None, None)
             else:
                 lbl = str(y_col)
-            plt.plot(df[date_col], df[y_col], label=lbl)
+            plt.plot(df_single[date_col], df_single[y_col], label=lbl)
             plt.legend()
             plt.title("收盘价走势")
         plt.xlabel(axis_label_zh(str(date_col)))
@@ -812,6 +843,45 @@ def _refresh_stale_price_window_if_needed(
     return df2, note
 
 
+def _auto_sync_when_empty(sql_input: str, engine) -> tuple[Optional[pd.DataFrame], str]:
+    """
+    本地查询无行且 SQL 中仅出现一只 ts_code 时，自动从 Tushare 补写日线并重跑同一 SQL。
+    不在此路径询问用户是否同步，由服务端直接补数。
+    """
+    if not tushare_token:
+        return None, ""
+    codes = _extract_ts_codes_from_sql(sql_input)
+    if len(codes) != 1:
+        return None, ""
+    ts_code = codes[0]
+    today = date.today()
+    start_d = today - timedelta(days=730)
+    try:
+        n, stock_name = _upsert_stock_daily_from_tushare(ts_code, start_d, today)
+    except Exception as e:
+        return None, (
+            f"> **自动联网补数失败**：{type(e).__name__}: {e}\n\n"
+            f"> 请检查 **TUSHARE_TOKEN** 与网络；并请用户核对 **{ts_code}** 是否已上市、代码是否正确。\n\n"
+        )
+    if n == 0:
+        return None, (
+            f"> **自动联网补数**：已向接口请求 **{ts_code}**（{stock_name}）日线，返回 **0** 条。\n\n"
+            "> 请如实告知用户：**未查询到该证券可用日线数据**，请确认是否已在沪深北交所上市、代码是否正确，或接口权限/积分是否足够。\n\n"
+        )
+    note = (
+        f"> **说明**：本地查询为空，已**自动**从网络同步 **{stock_name}**（`{ts_code}`）日线 **{n}** 条并重跑同一 SQL。\n\n"
+    )
+    try:
+        df2 = pd.read_sql(text(sql_input), engine)
+    except Exception as e:
+        return None, note + f"> 同步后重跑 SQL 失败：{type(e).__name__}: {e}\n\n"
+    if df2 is None or df2.empty:
+        return None, note + (
+            "> 同步后查询仍为空：请核对 SQL 条件（日期区间、WHERE 字段）是否与用户问题一致。\n\n"
+        )
+    return df2, note
+
+
 @register_tool("exc_sql")
 class ExcSQLTool(BaseTool):
     """SQL 查询工具：执行 MySQL SQL 并返回 markdown + 图表。"""
@@ -847,20 +917,45 @@ class ExcSQLTool(BaseTool):
             return f"连接/查询 MySQL 失败：{type(e).__name__}: {e}"
 
         refresh_note = ""
+        if df is None or df.empty:
+            df_retry, sync_note = _auto_sync_when_empty(sql_input, engine)
+            if df_retry is not None and not df_retry.empty:
+                df = df_retry
+                refresh_note = sync_note
+            else:
+                parts: list[str] = []
+                if sync_note:
+                    parts.append(sync_note.strip())
+                if not tushare_token:
+                    parts.append(
+                        "查询结果为空；**未配置 TUSHARE_TOKEN**，无法自动联网补数。"
+                        "配置后可重试；或请用户提供正确 **ts_code** 后由助手调用 sync_stock_daily。"
+                        "若持续无数据，请用户核对证券是否已在沪深北交所上市。"
+                    )
+                codes_in_sql = _extract_ts_codes_from_sql(sql_input)
+                if len(codes_in_sql) == 0:
+                    parts.append(
+                        "查询结果为空；当前 SQL 未包含可识别的标准 **ts_code**（如 000001.SZ），"
+                        "无法自动联网补库。请改写 SQL 含 `ts_code='xxxxxx.SH|SZ|BJ'` 后再执行。"
+                    )
+                elif len(codes_in_sql) > 1:
+                    parts.append(
+                        "查询结果为空；SQL 中出现多只证券代码，**不会**自动联网补库（避免误同步）。"
+                        "请使用 **sync_stock_daily** 逐只补数后重试，或拆分 SQL 为单只 ts_code。"
+                    )
+                else:
+                    parts.append(
+                        "查询结果为空；已尝试自动联网补数仍无匹配数据。"
+                        "请如实告知用户：无法提供该条件下的行情，并请核对代码、上市状态及 SQL 是否与问题一致（勿编造数值）。"
+                    )
+                return "\n\n".join(p for p in parts if p)
+
         if df is not None and not df.empty:
-            df, refresh_note = _refresh_stale_price_window_if_needed(sql_input, df, engine)
+            df, stale_note = _refresh_stale_price_window_if_needed(sql_input, df, engine)
+            refresh_note = (refresh_note or "") + stale_note
 
         if session_id is not None:
             _last_df_dict[session_id] = df
-
-        if df is None or df.empty:
-            return (
-                "查询结果为空。若库中尚无该证券日线：调用 **sync_stock_daily**（仅填 ts_code，"
-                "start_date/end_date 建议省略；需 **TUSHARE_TOKEN**），然后**仅执行一次**其返回中给出的 exc_sql 复查；"
-                "勿重复 sync。\n"
-                "若 sync 返回 0 条或已说明无数据，请转告用户：该股可能没有可用的上市日线，或代码/权限有误；"
-                "财报数据不在本库。"
-            )
 
         # 若结果缺少 stock_name 但包含 ts_code，则自动补全 stock_name 以便展示更完整信息
         cols_lower = {str(c).lower(): c for c in df.columns.tolist()}
@@ -879,7 +974,8 @@ class ExcSQLTool(BaseTool):
 
         # 只有 1 行结果时：不做可视化、不输出图片（避免误导性的“趋势/统计”图）
         if len(df.index) <= 1:
-            return (refresh_note or "") + rename_dataframe_columns_zh(df.head(1).copy()).to_markdown(
+            one = prepare_dataframe_for_markdown(df.head(1).copy())
+            return (refresh_note or "") + rename_dataframe_columns_zh(one).to_markdown(
                 index=False, tablefmt="github"
             )
 
@@ -887,7 +983,7 @@ class ExcSQLTool(BaseTool):
         head_n = 5
         tail_n = 5
         if len(df.index) <= head_n + tail_n:
-            preview_df = rename_dataframe_columns_zh(df.copy())
+            preview_df = rename_dataframe_columns_zh(prepare_dataframe_for_markdown(df.copy()))
             preview_md = (
                 (refresh_note or "")
                 + "### 查询结果\n\n"
@@ -895,8 +991,8 @@ class ExcSQLTool(BaseTool):
                 + "\n"
             )
         else:
-            preview_head = rename_dataframe_columns_zh(df.head(head_n).copy())
-            preview_tail = rename_dataframe_columns_zh(df.tail(tail_n).copy())
+            preview_head = rename_dataframe_columns_zh(prepare_dataframe_for_markdown(df.head(head_n).copy()))
+            preview_tail = rename_dataframe_columns_zh(prepare_dataframe_for_markdown(df.tail(tail_n).copy()))
             preview_md = (
                 (refresh_note or "")
                 + "### 查询结果（前 5 行）\n\n"
@@ -907,11 +1003,13 @@ class ExcSQLTool(BaseTool):
                 + "\n"
             )
 
-        # 描述统计：优先数值列，便于快速了解分布与极值
+        # 描述统计：多证券时按 ts_code 分别 describe，避免混成同一分布导致对比结论错误
         numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+        numeric_cols = [c for c in numeric_cols if str(c).lower() != "id"]
+        ts_col_desc = resolve_dataframe_column(df, "ts_code")
         if numeric_cols:
-            desc_df = rename_dataframe_columns_zh(df[numeric_cols].describe().round(6).copy())
-            desc_md = desc_df.to_markdown(tablefmt="github")
+            blocks = comparison_numeric_describe_blocks(df, ts_col_desc, numeric_cols)
+            desc_md = format_comparison_describe_markdown(blocks)
         else:
             desc_md = "无可用于描述统计的数值列。"
 

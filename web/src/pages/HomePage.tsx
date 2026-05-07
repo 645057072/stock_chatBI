@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { apiLogin, apiMe, apiRegister } from "../api";
+import { apiLogin, apiMe, apiRegister, NETWORK_UNAVAILABLE_ZH } from "../api";
 import styles from "./HomePage.module.css";
 
 export default function HomePage() {
@@ -12,10 +12,21 @@ export default function HomePage() {
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
+    let cancelled = false;
     void (async () => {
-      const me = await apiMe();
-      if (me) nav("/chat");
+      try {
+        const me = await apiMe();
+        if (cancelled) return;
+        if (me) nav("/chat");
+      } catch (ex) {
+        if (cancelled) return;
+        const msg = ex instanceof Error ? ex.message : NETWORK_UNAVAILABLE_ZH;
+        setErr(msg);
+      }
     })();
+    return () => {
+      cancelled = true;
+    };
   }, [nav]);
 
   async function onSubmit(e: FormEvent) {

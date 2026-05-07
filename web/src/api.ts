@@ -14,6 +14,30 @@ const prefix = apiBase();
 const GATEWAY_ZH =
   "网关暂时无法连接后端服务，请稍后重试；若反复出现请联系管理员检查 API 与 Nginx 状态。";
 
+/** 浏览器无法建立 TCP 连接（服务未启动、端口错误、防火墙等） */
+export const NETWORK_UNAVAILABLE_ZH =
+  "无法连接服务器（连接被拒绝或网络异常）。请确认已启动 Nginx/API（如 docker compose up -d），浏览器端口与 CHATBI_HTTP_PORT 映射一致，或联系管理员。";
+
+export function isNetworkFetchError(e: unknown): boolean {
+  if (!(e instanceof TypeError)) return false;
+  const msg = String(e.message || "").toLowerCase();
+  return (
+    msg.includes("fetch") ||
+    msg.includes("network") ||
+    msg.includes("load failed") ||
+    msg.includes("failed to fetch")
+  );
+}
+
+async function fetchOrThrow(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  try {
+    return await fetch(input, init);
+  } catch (e) {
+    if (isNetworkFetchError(e)) throw new Error(NETWORK_UNAVAILABLE_ZH);
+    throw e;
+  }
+}
+
 function looksLikeHtmlGateway(text: string): boolean {
   const t = text.trim();
   if (t.length < 24) return false;
@@ -66,7 +90,7 @@ async function parseJson(res: Response): Promise<unknown> {
 }
 
 export async function apiRegister(username: string, password: string) {
-  const res = await fetch(`${prefix}/auth/register`, {
+  const res = await fetchOrThrow(`${prefix}/auth/register`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     credentials: "include",
@@ -77,7 +101,7 @@ export async function apiRegister(username: string, password: string) {
 }
 
 export async function apiLogin(username: string, password: string) {
-  const res = await fetch(`${prefix}/auth/login`, {
+  const res = await fetchOrThrow(`${prefix}/auth/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     credentials: "include",
@@ -89,11 +113,15 @@ export async function apiLogin(username: string, password: string) {
 }
 
 export async function apiLogout() {
-  await fetch(`${prefix}/auth/logout`, { method: "POST", credentials: "include" });
+  try {
+    await fetchOrThrow(`${prefix}/auth/logout`, { method: "POST", credentials: "include" });
+  } catch {
+    /* 离线登出：忽略网络错误 */
+  }
 }
 
 export async function apiMe(): Promise<{ user_id: number; username: string } | null> {
-  const res = await fetch(`${prefix}/auth/session`, { credentials: "include" });
+  const res = await fetchOrThrow(`${prefix}/auth/session`, { credentials: "include" });
   if (!res.ok) return null;
   const data = await parseJson(res);
   const d = data as { logged_in?: boolean; user_id?: number; username?: string };
@@ -126,6 +154,7 @@ export async function apiChat(
     if (aborted) {
       throw new Error("对话请求超时，请缩短问题或稍后重试");
     }
+    if (isNetworkFetchError(e)) throw new Error(NETWORK_UNAVAILABLE_ZH);
     throw e;
   } finally {
     clearTimeout(timer);
@@ -142,12 +171,12 @@ export async function apiChat(
 
 /** 仅清空当前会话消息（保留会话条目） */
 export async function apiClearChat() {
-  await fetch(`${prefix}/chat/clear`, { method: "POST", credentials: "include" });
+  await fetchOrThrow(`${prefix}/chat/clear`, { method: "POST", credentials: "include" });
 }
 
 /** 从指定消息下标起丢弃本条及之后内容（下标须为用户消息，与 /chat/history 顺序一致） */
 export async function apiChatUndo(fromIndex: number): Promise<ChatMessage[]> {
-  const res = await fetch(`${prefix}/chat/undo`, {
+  const res = await fetchOrThrow(`${prefix}/chat/undo`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     credentials: "include",
@@ -172,13 +201,13 @@ export async function apiChatSessions(): Promise<{
   sessions: ChatSessionMeta[];
   active_session_id: string;
 }> {
-  const res = await fetch(`${prefix}/chat/sessions`, { credentials: "include" });
+  const res = await fetchOrThrow(`${prefix}/chat/sessions`, { credentials: "include" });
   if (!res.ok) return { sessions: [], active_session_id: "" };
   return res.json();
 }
 
 export async function apiNewChatSession(): Promise<{ session_id: string }> {
-  const res = await fetch(`${prefix}/chat/session/new`, {
+  const res = await fetchOrThrow(`${prefix}/chat/session/new`, {
     method: "POST",
     credentials: "include",
   });
@@ -188,7 +217,7 @@ export async function apiNewChatSession(): Promise<{ session_id: string }> {
 }
 
 export async function apiSelectChatSession(sessionId: string): Promise<void> {
-  const res = await fetch(`${prefix}/chat/session/select`, {
+  const res = await fetchOrThrow(`${prefix}/chat/session/select`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     credentials: "include",
@@ -202,7 +231,7 @@ export async function apiChatHistory(): Promise<{
   messages: ChatMessage[];
   session_id: string;
 }> {
-  const res = await fetch(`${prefix}/chat/history`, { credentials: "include" });
+  const res = await fetchOrThrow(`${prefix}/chat/history`, { credentials: "include" });
   if (!res.ok) return { messages: [], session_id: "" };
   return res.json();
 }

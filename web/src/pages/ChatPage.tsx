@@ -14,6 +14,7 @@ import {
   AUTH_EXPIRED_MESSAGE,
   ChatMessage,
   ChatSessionMeta,
+  NETWORK_UNAVAILABLE_ZH,
   sanitizeAssistantReply,
 } from "../api";
 import styles from "./ChatPage.module.css";
@@ -70,18 +71,22 @@ export default function ChatPage() {
 
   useEffect(() => {
     void (async () => {
-      const me = await apiMe();
-      if (!me) {
-        nav("/");
-        return;
+      try {
+        const me = await apiMe();
+        if (!me) {
+          nav("/");
+          return;
+        }
+        setUsername(me.username);
+        await refreshSessions();
+        const hist = await apiChatHistory();
+        const initialRows = toRows(hist.messages || []);
+        setRows(initialRows);
+        setHideQuickPrompts(initialRows.length > 0);
+        if (hist.session_id) setActiveSessionId(hist.session_id);
+      } catch {
+        setErr(NETWORK_UNAVAILABLE_ZH);
       }
-      setUsername(me.username);
-      await refreshSessions();
-      const hist = await apiChatHistory();
-      const initialRows = toRows(hist.messages || []);
-      setRows(initialRows);
-      setHideQuickPrompts(initialRows.length > 0);
-      if (hist.session_id) setActiveSessionId(hist.session_id);
     })();
   }, [nav, refreshSessions]);
 
@@ -90,8 +95,12 @@ export default function ChatPage() {
     const revalidate = () => {
       if (document.visibilityState !== "visible") return;
       void (async () => {
-        const me = await apiMe();
-        if (!me) nav("/");
+        try {
+          const me = await apiMe();
+          if (!me) nav("/");
+        } catch {
+          /* 短暂断网不强制退出，避免误踢回首页 */
+        }
       })();
     };
     document.addEventListener("visibilitychange", revalidate);

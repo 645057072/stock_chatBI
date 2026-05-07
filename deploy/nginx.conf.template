@@ -30,8 +30,9 @@ server {
         proxy_send_timeout ${CHATBI_NGINX_PROXY_TIMEOUT};
         proxy_read_timeout ${CHATBI_NGINX_PROXY_TIMEOUT};
         client_max_body_size 20m;
+        # 仅关闭缓冲即可；勿单独加大 proxy_buffer_size 或 proxy_busy_buffers_size，易触发
+        # 「proxy_busy_buffers_size must be less than all proxy_buffers minus one buffer」导致 nginx -t 失败
         proxy_buffering off;
-        proxy_buffer_size 16k;
     }
 
     location / {
@@ -70,7 +71,6 @@ server {
         proxy_read_timeout ${CHATBI_NGINX_PROXY_TIMEOUT};
         client_max_body_size 20m;
         proxy_buffering off;
-        proxy_buffer_size 16k;
     }
 
     location / {

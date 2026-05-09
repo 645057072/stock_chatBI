@@ -63,6 +63,14 @@ export const AUTH_EXPIRED_MESSAGE = "未登录或登录已失效，请重新登�
 /** 对话接口最长等待（毫秒），避免助手推理过久时界面一直转圈 */
 const CHAT_FETCH_TIMEOUT_MS = 600_000;
 
+/** 用户点击「撤销」主动中止对话请求时抛出，与超时区分 */
+export class ChatAbortedError extends Error {
+  constructor(message = "已撤销本次咨询") {
+    super(message);
+    this.name = "ChatAbortedError";
+  }
+}
+
 function humanizeHttpMessage(detail: string, status: number): string {
   if (status === 401) return AUTH_EXPIRED_MESSAGE;
   if (status === 502 || status === 503 || status === 504) return GATEWAY_ZH;
@@ -131,10 +139,29 @@ export async function apiMe(): Promise<{ user_id: number; username: string } | n
 
 export async function apiChat(
   message: string,
-  sessionId?: string | null
+  sessionId?: string | null,
+  signal?: AbortSignal
 ): Promise<{ reply: string; session_id?: string }> {
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), CHAT_FETCH_TIMEOUT_MS);
+  let abortKind: "timeout" | "user" | null = null;
+  const timer = setTimeout(() => {
+    abortKind = "timeout";
+    ctrl.abort();
+  }, CHAT_FETCH_TIMEOUT_MS);
+
+  const onUserAbort = () => {
+    abortKind = "user";
+    ctrl.abort();
+  };
+  if (signal) {
+    if (signal.aborted) {
+      abortKind = "user";
+      ctrl.abort();
+    } else {
+      signal.addEventListener("abort", onUserAbort, { once: true });
+    }
+  }
+
   let res: Response;
   try {
     res = await fetch(`${prefix}/chat`, {
@@ -152,6 +179,7 @@ export async function apiChat(
       (e instanceof Error && e.name === "AbortError") ||
       (typeof DOMException !== "undefined" && e instanceof DOMException && e.name === "AbortError");
     if (aborted) {
+      if (abortKind === "user") throw new ChatAbortedError();
       throw new Error("对话请求超时，请缩短问题或稍后重试");
     }
     if (isNetworkFetchError(e)) throw new Error(NETWORK_UNAVAILABLE_ZH);

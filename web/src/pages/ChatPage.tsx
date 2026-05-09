@@ -12,6 +12,7 @@ import {
   apiNewChatSession,
   apiSelectChatSession,
   AUTH_EXPIRED_MESSAGE,
+  ChatAbortedError,
   ChatMessage,
   ChatSessionMeta,
   NETWORK_UNAVAILABLE_ZH,
@@ -58,6 +59,8 @@ export default function ChatPage() {
   /** 助手请求进行中时已等待秒数（仅展示） */
   const [thinkingSeconds, setThinkingSeconds] = useState(0);
   const bottomRef = useRef<HTMLDivElement | null>(null);
+  /** 发送中的对话请求，供「撤销」中止等待（服务端任务仍可能继续直至结束） */
+  const chatAbortRef = useRef<AbortController | null>(null);
 
   const refreshSessions = useCallback(async () => {
     try {
@@ -173,7 +176,12 @@ export default function ChatPage() {
   }
 
   async function onUndoFromRow(rowIndex: number) {
-    if (sending) return;
+    if (sending) {
+      // 发送中：仅允许对当前这一条提问撤销等待，不改动此前已完成的问答记录
+      if (rowIndex !== rows.length - 1) return;
+      chatAbortRef.current?.abort();
+      return;
+    }
     const row = rows[rowIndex];
     if (!row || row.role !== "user") return;
     setErr(null);
@@ -188,20 +196,9 @@ export default function ChatPage() {
     }
   }
 
-  async function onResendFromRow(rowIndex: number, text: string) {
+  async function onResendFromRow(_rowIndex: number, text: string) {
     if (sending || !text.trim()) return;
     setErr(null);
-    try {
-      await apiChatUndo(rowIndex);
-      const hist = await apiChatHistory();
-      setRows(toRows(hist.messages || []));
-      await refreshSessions();
-    } catch (ex) {
-      const msg = ex instanceof Error ? ex.message : "重发前撤销失败";
-      setErr(msg);
-      if (msg === AUTH_EXPIRED_MESSAGE) nav("/");
-      return;
-    }
     await onSend(undefined, text);
   }
 
@@ -212,20 +209,35 @@ export default function ChatPage() {
     setHideQuickPrompts(true);
     setInput("");
     setErr(null);
+    const ac = new AbortController();
+    chatAbortRef.current = ac;
     setRows((r) => [...r, { role: "user", text: q }]);
     setSending(true);
     try {
-      const { reply, session_id } = await apiChat(q, activeSessionId || undefined);
+      const { reply, session_id } = await apiChat(q, activeSessionId || undefined, ac.signal);
       if (session_id) setActiveSessionId(session_id);
       setRows((r) => [...r, { role: "assistant", text: reply }]);
       await refreshSessions();
     } catch (ex) {
-      const msg = ex instanceof Error ? ex.message : "发送失败";
-      setErr(msg);
-      if (msg === AUTH_EXPIRED_MESSAGE) {
-        nav("/");
+      if (ex instanceof ChatAbortedError) {
+        try {
+          const hist = await apiChatHistory();
+          setRows(toRows(hist.messages || []));
+          if (hist.session_id) setActiveSessionId(hist.session_id);
+          await refreshSessions();
+        } catch {
+          /* 同步失败时保留本地列表 */
+        }
+        setErr(null);
+      } else {
+        const msg = ex instanceof Error ? ex.message : "发送失败";
+        setErr(msg);
+        if (msg === AUTH_EXPIRED_MESSAGE) {
+          nav("/");
+        }
       }
     } finally {
+      chatAbortRef.current = null;
       setSending(false);
     }
   }
@@ -305,8 +317,12 @@ export default function ChatPage() {
                     <button
                       type="button"
                       className={styles.msgActionBtn}
-                      disabled={sending}
-                      title="撤销本条提问及之后的对话"
+                      disabled={sending && i !== rows.length - 1}
+                      title={
+                        sending && i === rows.length - 1
+                          ? "撤销本次咨询：中止等待，不再接收本轮回复（服务端可能仍在处理）"
+                          : "从本条提问起删除之后的对话记录"
+                      }
                       onClick={() => void onUndoFromRow(i)}
                     >
                       撤销
@@ -315,7 +331,7 @@ export default function ChatPage() {
                       type="button"
                       className={styles.msgActionBtn}
                       disabled={sending}
-                      title="删除本条及之后记录并重新发送该问题"
+                      title="在当前会话末尾再次发送本条问题，不清空已有问答"
                       onClick={() => void onResendFromRow(i, row.text)}
                     >
                       重发

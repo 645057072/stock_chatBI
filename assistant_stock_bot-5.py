@@ -1653,9 +1653,11 @@ class ProphetAnalysisTool(BaseTool):
         else:
             args = params
 
-        ts_code = str(args.get("ts_code", "")).strip()
+        ts_code = str(args.get("ts_code", "")).strip().upper()
         if not ts_code:
             return "参数 ts_code 为必填。"
+        if not re.match(r"^\d{6}\.(SH|SZ|BJ)$", ts_code):
+            return "ts_code 格式应为 6 位数字+.SH/.SZ/.BJ，例如 002594.SZ。"
         start_raw = args.get("start_date")
         end_raw = args.get("end_date")
         if isinstance(start_raw, str) and not start_raw.strip():
@@ -1671,6 +1673,21 @@ class ProphetAnalysisTool(BaseTool):
                 from fbprophet import Prophet
         except Exception as e:
             return f"未安装 Prophet，无法执行周期性分析：{e}。请执行：pip install prophet"
+
+        # 分析前先拉取截止今日（自然日）的日线并写入库，避免仅用本地陈旧数据拟合
+        sync_end = date.today()
+        sync_start = sync_end - timedelta(days=730)
+        try:
+            n_sync, _sync_name = _upsert_stock_daily_from_tushare(ts_code, sync_start, sync_end)
+        except RuntimeError as e:
+            return str(e)
+        except Exception as e:
+            return f"Prophet 分析前联网同步行情失败：{type(e).__name__}: {e}"
+        if n_sync == 0:
+            return (
+                f"Prophet 分析前未能从行情源获取 **{ts_code}** 在 **{sync_start}** ~ **{sync_end}** 的日线，无法继续。"
+                "请检查证券代码、TUSHARE_TOKEN 权限或网络。"
+            )
 
         try:
             engine = _mysql_engine()
@@ -1764,7 +1781,7 @@ class ProphetAnalysisTool(BaseTool):
             "### Prophet 周期性分析说明\n\n"
             f"- **ts_code**: {ts_code}\n"
             f"- **stock_name**: {stock_name}\n"
-            f"- **分析区间**: {win_start.date()} ~ {win_end.date()}（数据来源：MySQL `stock_daily`）\n"
+            f"- **分析区间**: {win_start.date()} ~ {win_end.date()}（分析前已通过 Tushare 同步至 **{sync_end}**，序列来自 MySQL `stock_daily`，最近交易日以同步结果为准）\n"
             "- **模型**: Prophet（启用 `trend`、`weekly`、`yearly`）\n\n"
         )
         summary_md = "### 周期性摘要\n\n" + summary_df.to_markdown(index=False, tablefmt="github") + "\n\n"

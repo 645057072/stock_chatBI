@@ -120,7 +120,7 @@ CREATE TABLE stock_daily (
 5) 写 SQL 时尽量包含 stock_name（若用户 SQL 未选 stock_name，工具会自动补全，但你仍优先在 SQL 里显式选择 stock_name）。**多只股票对比**时 SELECT **必须**含 **ts_code**（不可省略），否则无法按证券分别生成描述统计与多条对比曲线。
 6) 当用户要求“预测未来股价 / ARIMA / 未来 n 天”等时，必须调用 arima_stock 工具：参数 ts_code（必填）、n（预测交易日数量，必填）。不要手写预测数值。
 7) 当用户要求“布林带 / 超买超卖 / BOLL”等时，必须调用 boll_detection 工具：ts_code（必填）；start_date、end_date（可选，YYYY-MM-DD，默认近一年至今天）。**工具返回后必须原样粘贴全部内容（含「触点日期列表」行与表格），禁止自行改写、概括或另写一套日期。**
-8) 当用户要求“Prophet / 周期性分析 / trend weekly yearly”等时，必须调用 prophet_analysis：ts_code（必填）；start_date、end_date（可选，YYYY-MM-DD，默认近一年）。禁止手写趋势与季节性结论。
+8) 当用户要求“Prophet / 周期性分析 / trend weekly yearly”等时，必须调用 prophet_analysis：**通常只传 ts_code（必填）**。除非用户**原文明确写出**具体起止日期，否则**禁止**传入 start_date、end_date（误填往年截止日会导致图表停在旧日期；工具内部会以行情最新交易日为锚默认「近一年」）。禁止手写趋势与季节性结论。
 9) **本地无数据时**：`exc_sql` 在 SQL 中出现一只或多只标准 **ts_code**（同一 SQL 内解析到的列表）且已配置 **TUSHARE_TOKEN** 时，会在服务端**自动逐只联网补数并重跑同一 SQL**，无需用户确认是否同步；工具返回中含「按 SQL 中出现的证券代码自动尝试联网补数」。此时**不要**再让用户手动执行 **sync_stock_daily** 或粘贴 JSON 工具调用。**不要**因「多只股票」拒绝自动补库。**未配置 TUSHARE_TOKEN** 时须如实说明无法拉取，禁止编造行情。
 10) 用户说「近一年」「过去一年」「一年来」「最新一年」等**滚动窗口**时，SQL 必须使用 **DATE_SUB(CURDATE(), INTERVAL 1 YEAR)** 与 **trade_date <= CURDATE()** 界定区间；**禁止**随意写死如「2023-01-01 至 2024-01-01」这类与用户意图不符的旧年份，除非用户明确指定该历史年份区间。
 11) sync_stock_daily：**不要**自行把 end_date 写成往年某一天（会与「近一年 + CURDATE()」查询错位）；日期参数优先省略。若 Tushare 拉取结果为 0 条，应向用户说明可能原因：代码错误、该股未在 A 股上市/已退市无日线、或接口权限/积分不足——**不可**反复同步同一 ts_code。
@@ -222,11 +222,11 @@ functions_desc = [
                 },
                 "start_date": {
                     "type": "string",
-                    "description": "分析开始日期 YYYY-MM-DD（可选，默认近一年）",
+                    "description": "仅在用户明确给出起始日时填写 YYYY-MM-DD；「近一年」类问题请省略",
                 },
                 "end_date": {
                     "type": "string",
-                    "description": "分析结束日期 YYYY-MM-DD（可选，默认到最近交易日）",
+                    "description": "仅在用户明确给出截止日时填写；「近一年」类问题请省略（勿写往年日期）",
                 },
             },
             "required": ["ts_code"],
@@ -1586,6 +1586,30 @@ class BollDetectionTool(BaseTool):
 
 PROPHET_MIN_SAMPLES = 60
 
+# 模型误传的 end_date 若早于「库内最新交易日」超过该间隔（自然日），则丢弃自定义区间，改走默认近一年。
+# 取约 17 个月：可过滤「停在 2024 年初」类错误，同时保留用户可能明确指定的「截至上一年末」区间（约滞后 12～16 个月）。
+PROPHET_STALE_END_LAG_DAYS = 520
+
+
+def _prophet_drop_stale_optional_dates(
+    anchor_end: date,
+    start_raw: Optional[str],
+    end_raw: Optional[str],
+    max_lag_days: int = PROPHET_STALE_END_LAG_DAYS,
+) -> tuple[Optional[str], Optional[str]]:
+    """
+    丢弃明显滞后的 end_date（及同时传入的 start_date），避免「近一年」问题被模型写成往年截止区间。
+    """
+    if not end_raw:
+        return start_raw, end_raw
+    try:
+        ed = date.fromisoformat(str(end_raw).strip()[:10])
+    except ValueError:
+        return start_raw, end_raw
+    if (anchor_end - ed).days > max_lag_days:
+        return None, None
+    return start_raw, end_raw
+
 
 def _resolve_prophet_window(
     engine,
@@ -1695,13 +1719,13 @@ class ProphetAnalysisTool(BaseTool):
         {
             "name": "start_date",
             "type": "string",
-            "description": "分析开始日期 YYYY-MM-DD（可选）",
+            "description": "仅用户明确指定起始日时填写；默认「近一年」请省略",
             "required": False,
         },
         {
             "name": "end_date",
             "type": "string",
-            "description": "分析结束日期 YYYY-MM-DD（可选）",
+            "description": "仅用户明确指定截止日时填写；默认滚到最新交易日请省略，禁止填往年日期",
             "required": False,
         },
     ]
@@ -1752,6 +1776,15 @@ class ProphetAnalysisTool(BaseTool):
             engine = _mysql_engine()
             # 大宗同步后再用「短窗口最近交易日」对齐终点，补拉库内滞后区间
             _ensure_prophet_daily_aligned_with_quote(ts_code, engine)
+            anchor_end = _db_max_trade_date(engine, ts_code)
+            if anchor_end is None:
+                raise ValueError(f"同步后仍未找到 ts_code={ts_code} 的 trade_date")
+            # 模型常误传往年 end_date，导致「近一年」实际变成旧区间；与最新交易日相差过大则忽略自定义区间
+            start_raw, end_raw = _prophet_drop_stale_optional_dates(
+                anchor_end,
+                str(start_raw) if start_raw is not None else None,
+                str(end_raw) if end_raw is not None else None,
+            )
             win_start, win_end = _resolve_prophet_window(
                 engine,
                 ts_code,

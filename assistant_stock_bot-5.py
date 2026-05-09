@@ -59,8 +59,10 @@ from app.matplotlib_cn import configure_matplotlib_fonts
 from app.sql_guard import validate_exc_sql_or_raise
 from app.stock_display import (
     axis_label_zh,
+    canonical_stock_name_for_ts_code,
     comparison_numeric_describe_blocks,
     format_comparison_describe_markdown,
+    merge_canonical_into_ts_code_name_map,
     normalize_ts_code_series,
     prepare_dataframe_for_markdown,
     rename_dataframe_columns_zh,
@@ -124,7 +126,8 @@ CREATE TABLE stock_daily (
 11) sync_stock_daily：**不要**自行把 end_date 写成往年某一天（会与「近一年 + CURDATE()」查询错位）；日期参数优先省略。若 Tushare 拉取结果为 0 条，应向用户说明可能原因：代码错误、该股未在 A 股上市/已退市无日线、或接口权限/积分不足——**不可**反复同步同一 ts_code。
 12) 当用户**同一轮问题**中同时要求布林带（超买/超卖/BOLL）与「预测未来股价 / ARIMA / 未来 n 天」时，须**依次**调用：先 **boll_detection**（完整输出），再 **arima_stock**（同一 ts_code、用户指定的预测天数 n）；两次工具返回的表格与图片均须**原样完整**出现在答复中，禁止只保留其中一次结果。
 13) **证券识别与代码校验**：用户给出的名称或代码**不明确、错误或与多只证券混淆**时（例如仅「贵州的股票」「本省龙头」、简称可能对应多只股票、代码不是 **6 位数字+.SH/.SZ/.BJ**、或少写交易所后缀），**禁止**擅自选定某一只证券（尤其禁止默认知名股票如贵州茅台）并调用 exc_sql / sync_stock_daily / arima_stock / boll_detection / prophet_analysis；**禁止**编造 ts_code。此时**仅输出文字**：说明无法唯一确定标的或格式不对，并请用户提供**准确的标准证券代码**（如 600519.SH）或与库内一致的**完整股票简称**，确认后再查询。仅当用户已给出**可唯一对应**的 ts_code（格式正确）或经你判断**无歧义**的单一简称时，方可调用工具拉数。
-14) **意图与结果一致（禁止答非所问）**：答复必须严格对应 exc_sql 返回表的**列名与数值**，结合用户问法解释（单位：`vol` 为**手**，价格为**元**）。**禁止**把样本条数、`describe` 的 **count**、`COUNT(*)` 或统计区间内的**交易日个数**说成「成交量」「日均成交量」。用户问「**本月**日均成交量」时，SQL 须用 **`AVG(vol)`**，且日期限定 **`trade_date >= DATE_FORMAT(CURDATE(), '%Y-%m-01') AND trade_date <= CURDATE()`**；不得用「近一年」SQL 的结果回答「本月」问题。工具返回的表格已格式化为易读数字，**禁止**自行改写或捏造与表不符的结论。
+14) **中文简称与 ts_code 必须一致**（示例仅供对照，调用工具时严禁张冠李戴）：**航天信息**=`600271.SH`；**贵州茅台**=`600519.SH`；**五粮液**=`000858.SZ`；**比亚迪**=`002594.SZ`；**中兴通讯**=`000063.SZ`；**中芯国际**=`688981.SH`；**广发证券**=`000776.SZ`。用户只说中文名时，**必须**使用上表对应代码，**禁止**把示例 SQL 里的 600519.SH 套用到其它股票。
+15) **意图与结果一致（禁止答非所问）**：答复必须严格对应 exc_sql 返回表的**列名与数值**，结合用户问法解释（单位：`vol` 为**手**，价格为**元**）。**禁止**把样本条数、`describe` 的 **count**、`COUNT(*)` 或统计区间内的**交易日个数**说成「成交量」「日均成交量」。用户问「**本月**日均成交量」时，SQL 须用 **`AVG(vol)`**，且日期限定 **`trade_date >= DATE_FORMAT(CURDATE(), '%Y-%m-01') AND trade_date <= CURDATE()`**；不得用「近一年」SQL 的结果回答「本月」问题。工具返回的表格已格式化为易读数字，**禁止**自行改写或捏造与表不符的结论。
 
 你需要根据用户问题生成 SQL（MySQL 方言）并调用 exc_sql 工具执行，返回查询结果；预测类问题调用 arima_stock；布林带检测调用 boll_detection；周期性分析调用 prophet_analysis；**本地无数据时 exc_sql 会自动尝试联网补数（见规则 9）**。
 
@@ -292,16 +295,25 @@ def _mysql_engine():
 
 
 def _get_ts_code_name_map(engine) -> dict[str, str]:
-    """从 stock_daily 读取 ts_code->stock_name 映射，并做缓存。"""
+    """从 stock_daily 读取 ts_code->stock_name（按出现次数取众数），权威表覆盖错配，并做缓存。"""
     global _ts_code_name_cache
     if _ts_code_name_cache:
         return _ts_code_name_cache
     try:
-        mdf = pd.read_sql(
-            text("SELECT DISTINCT ts_code, stock_name FROM stock_daily"),
-            engine,
-        )
-        m = dict(zip(mdf["ts_code"].astype(str), mdf["stock_name"].astype(str)))
+        mdf = pd.read_sql(text("SELECT ts_code, stock_name FROM stock_daily"), engine)
+        if mdf.empty:
+            _ts_code_name_cache = {}
+            return _ts_code_name_cache
+
+        def _mode_first(series: pd.Series) -> str:
+            modes = series.mode(dropna=True)
+            if len(modes):
+                return str(modes.iloc[0]).strip()
+            return str(series.iloc[-1]).strip()
+
+        grp = mdf.groupby(mdf["ts_code"].astype(str).str.strip().str.upper())["stock_name"]
+        m = grp.agg(_mode_first).to_dict()
+        m = merge_canonical_into_ts_code_name_map(m)
         _ts_code_name_cache = m
         return m
     except Exception:
@@ -451,25 +463,41 @@ def _enrich_df_display_stock_names(df: pd.DataFrame) -> pd.DataFrame:
             pro = None
     if not sn_col:
         idx = out.columns.get_loc(ts_col)
-        resolved = [
-            _fetch_stock_display_name(pro, str(tc)) if pro else str(tc).split(".")[0][:32]
-            for tc in out[ts_col].astype(str)
-        ]
+        resolved = []
+        for tc in out[ts_col].astype(str):
+            tcs = str(tc).strip()
+            cn = canonical_stock_name_for_ts_code(tcs)
+            if cn:
+                resolved.append(cn)
+            elif pro:
+                resolved.append(_fetch_stock_display_name(pro, tcs))
+            else:
+                resolved.append(str(tcs).split(".")[0][:32])
         out.insert(idx + 1, "stock_name", resolved)
     else:
         sn_actual = sn_col
         for tc in out[ts_col].astype(str).str.strip().unique():
             mask = out[ts_col].astype(str).str.strip() == tc
             sample = out.loc[mask, sn_actual].iloc[0]
-            if stock_name_needs_resolve(sample, tc):
+            canon = canonical_stock_name_for_ts_code(tc)
+            if canon:
+                cur = str(sample).strip() if sample is not None and not (
+                    isinstance(sample, float) and pd.isna(sample)
+                ) else ""
+                if cur != canon:
+                    out.loc[mask, sn_actual] = canon
+            elif stock_name_needs_resolve(sample, tc):
                 name = _fetch_stock_display_name(pro, tc) if pro else str(tc).split(".")[0][:32]
                 out.loc[mask, sn_actual] = name
     return out
 
 
 def _display_name_for_ts_code(ts_code: str, db_name: object) -> str:
-    """工具输出用证券简称：库内错误代码占位时优先 Tushare 名称。"""
+    """工具输出用证券简称：权威表优先，其次库内合法中文名，否则 Tushare/代码前缀。"""
     tc = str(ts_code).strip()
+    canon = canonical_stock_name_for_ts_code(tc)
+    if canon:
+        return canon
     if not stock_name_needs_resolve(db_name, tc):
         return str(db_name).strip()
     if tushare_token:

@@ -5,6 +5,18 @@ from __future__ import annotations
 
 import pandas as pd
 
+# 证券代码 -> 常用中文简称（与主流行情软件/Tushare 证券简称一致）。
+# 用于纠偏 stock_daily 中 stock_name 与 ts_code 错配（例如 600519 被标成「航天信息」）。
+CANONICAL_TS_CODE_TO_STOCK_NAME_ZH: dict[str, str] = {
+    "600519.SH": "贵州茅台",
+    "600271.SH": "航天信息",
+    "000858.SZ": "五粮液",
+    "000776.SZ": "广发证券",
+    "688981.SH": "中芯国际",
+    "002594.SZ": "比亚迪",
+    "000063.SZ": "中兴通讯",
+}
+
 # stock_daily 及工具输出常用列 -> 中文表头
 DISPLAY_COL_ZH: dict[str, str] = {
     "trade_date": "交易日期",
@@ -31,6 +43,23 @@ DISPLAY_COL_ZH: dict[str, str] = {
     "avg_daily_vol_hand": "本月日均成交量(手)",
     "trading_days_in_month": "本月交易日数",
 }
+
+
+def canonical_stock_name_for_ts_code(ts_code: object) -> str | None:
+    """若 ts_code 在权威表中有定义，返回对应中文简称，否则 None。"""
+    if ts_code is None:
+        return None
+    tc = str(ts_code).strip().upper()
+    return CANONICAL_TS_CODE_TO_STOCK_NAME_ZH.get(tc)
+
+
+def merge_canonical_into_ts_code_name_map(ts_to_name: dict[str, str]) -> dict[str, str]:
+    """对已有 ts_code->stock_name 映射用权威表覆盖（仅覆盖 map 中已出现的 ts_code）。"""
+    out = {str(k).strip().upper(): str(v) for k, v in ts_to_name.items()}
+    for tc, nm in CANONICAL_TS_CODE_TO_STOCK_NAME_ZH.items():
+        if tc in out:
+            out[tc] = nm
+    return out
 
 
 def stock_name_needs_resolve(name: object, ts_code: str) -> bool:

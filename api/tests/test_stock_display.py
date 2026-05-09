@@ -5,8 +5,10 @@ import pandas as pd
 
 from app.stock_display import (
     axis_label_zh,
+    canonical_stock_name_for_ts_code,
     comparison_numeric_describe_blocks,
     format_comparison_describe_markdown,
+    merge_canonical_into_ts_code_name_map,
     prepare_dataframe_for_markdown,
     rename_dataframe_columns_zh,
     resolve_dataframe_column,
@@ -23,6 +25,18 @@ def test_stock_name_needs_resolve_when_numeric_or_code():
 
 def test_stock_name_needs_resolve_when_real_name():
     assert stock_name_needs_resolve("贵州茅台", "600519.SH") is False
+
+
+def test_canonical_stock_name_for_ts_code():
+    assert canonical_stock_name_for_ts_code("600271.SH") == "航天信息"
+    assert canonical_stock_name_for_ts_code("600519.sh") == "贵州茅台"
+    assert canonical_stock_name_for_ts_code("999999.SH") is None
+
+
+def test_merge_canonical_overrides_wrong_db_name():
+    m = merge_canonical_into_ts_code_name_map({"600519.SH": "航天信息", "600271.SH": "航天信息"})
+    assert m["600519.SH"] == "贵州茅台"
+    assert m["600271.SH"] == "航天信息"
 
 
 def test_rename_dataframe_columns_zh_partial():

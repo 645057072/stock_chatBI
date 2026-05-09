@@ -547,7 +547,8 @@ def chat_undo_tail(
     trimmed = messages[: body.from_index]
     _save_messages(r, uid, sess_id, trimmed)
     _refresh_session_meta(r, uid, sess_id, trimmed)
-    return {"ok": True, "messages": trimmed}
+    # 置信度：本条及之后消息已从会话移除，与服务端推理无关（固定为 1.0）
+    return {"ok": True, "messages": trimmed, "confidence": 1.0}
 
 
 @app.post("/chat/session/new")

@@ -203,7 +203,10 @@ export async function apiClearChat() {
 }
 
 /** 从指定消息下标起丢弃本条及之后内容（下标须为用户消息，与 /chat/history 顺序一致） */
-export async function apiChatUndo(fromIndex: number): Promise<ChatMessage[]> {
+export async function apiChatUndo(fromIndex: number): Promise<{
+  messages: ChatMessage[];
+  confidence?: number;
+}> {
   const res = await fetchOrThrow(`${prefix}/chat/undo`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -212,8 +215,11 @@ export async function apiChatUndo(fromIndex: number): Promise<ChatMessage[]> {
   });
   const data = await parseJson(res);
   if (!res.ok) throw new Error(humanizeHttpMessage(errDetail(data), res.status));
-  const out = data as { messages?: ChatMessage[] };
-  return Array.isArray(out.messages) ? out.messages : [];
+  const out = data as { messages?: ChatMessage[]; confidence?: number };
+  return {
+    messages: Array.isArray(out.messages) ? out.messages : [],
+    confidence: typeof out.confidence === "number" ? out.confidence : undefined,
+  };
 }
 
 export type ChatMessage = { role: string; content: string };

@@ -414,6 +414,65 @@ def _fetch_latest_quote_by_ts_code(ts_code: str, lookback_days: int = 20) -> Opt
         return None
 
 
+def _parse_tushare_trade_date_cell(raw) -> Optional[date]:
+    """将 Tushare daily 的 trade_date（常为 YYYYMMDD 字符串）转为 date。"""
+    if raw is None or (isinstance(raw, float) and pd.isna(raw)):
+        return None
+    s = str(raw).strip()
+    if len(s) == 8 and s.isdigit():
+        return date(int(s[:4]), int(s[4:6]), int(s[6:8]))
+    try:
+        return pd.to_datetime(s).date()
+    except Exception:
+        return None
+
+
+def _db_max_trade_date(engine, ts_code: str) -> Optional[date]:
+    """库内某标的最新交易日。"""
+    q = text(
+        """
+        SELECT MAX(trade_date) AS max_td
+        FROM stock_daily
+        WHERE ts_code = :ts_code
+        """
+    )
+    row = pd.read_sql(q, engine, params={"ts_code": ts_code})
+    if row.empty or row["max_td"].iloc[0] is None:
+        return None
+    return pd.to_datetime(row["max_td"].iloc[0]).date()
+
+
+def _ensure_prophet_daily_aligned_with_quote(ts_code: str, engine) -> None:
+    """
+    Prophet 分析前：用短窗口日线探测行情源「最近交易日」，若优于库内 MAX 则补拉缺口，
+    避免仅用本地陈旧 MAX(trade_date) 当作「近一年」终点。
+    """
+    if not tushare_token:
+        return
+    quote_row = _fetch_latest_quote_by_ts_code(ts_code, lookback_days=400)
+    quote_d = _parse_tushare_trade_date_cell(quote_row.get("trade_date")) if quote_row else None
+    if quote_d is None:
+        return
+    db_d = _db_max_trade_date(engine, ts_code)
+    if db_d is None:
+        return
+    if quote_d > db_d:
+        gap_start = db_d + timedelta(days=1)
+        _upsert_stock_daily_from_tushare(ts_code, gap_start, date.today())
+
+
+def _prophet_data_timeliness_confidence(last_trade: date, calendar_today: date) -> tuple[float, str]:
+    """按最近交易日与自然日间隔给出数据新鲜度置信度（非模型后验概率）。"""
+    gap = (calendar_today - last_trade).days
+    if gap <= 2:
+        return 0.95, "高"
+    if gap <= 5:
+        return 0.82, "中"
+    if gap <= 12:
+        return 0.68, "中低"
+    return 0.50, "低"
+
+
 def _invalidate_stock_name_caches() -> None:
     """写入 stock_daily 后清空映射缓存，避免助手仍用旧映射。"""
     global _ts_code_name_cache, _stock_name_to_ts_codes_cache
@@ -1691,6 +1750,8 @@ class ProphetAnalysisTool(BaseTool):
 
         try:
             engine = _mysql_engine()
+            # 大宗同步后再用「短窗口最近交易日」对齐终点，补拉库内滞后区间
+            _ensure_prophet_daily_aligned_with_quote(ts_code, engine)
             win_start, win_end = _resolve_prophet_window(
                 engine,
                 ts_code,
@@ -1781,10 +1842,19 @@ class ProphetAnalysisTool(BaseTool):
             "### Prophet 周期性分析说明\n\n"
             f"- **ts_code**: {ts_code}\n"
             f"- **stock_name**: {stock_name}\n"
-            f"- **分析区间**: {win_start.date()} ~ {win_end.date()}（分析前已通过 Tushare 同步至 **{sync_end}**，序列来自 MySQL `stock_daily`，最近交易日以同步结果为准）\n"
+            f"- **分析区间**: {win_start.date()} ~ {win_end.date()}（分析前已通过 Tushare 批量同步至 **{sync_end}**，"
+            "并用短窗口日线校对行情源「最近交易日」与库内 `MAX(trade_date)`，必要时补拉缺口；拟合用 MySQL `stock_daily`）\n"
             "- **模型**: Prophet（启用 `trend`、`weekly`、`yearly`）\n\n"
         )
         summary_md = "### 周期性摘要\n\n" + summary_df.to_markdown(index=False, tablefmt="github") + "\n\n"
+
+        conf_val, conf_lbl = _prophet_data_timeliness_confidence(win_end.date(), date.today())
+        conf_md = (
+            "### 数据时效置信度\n\n"
+            f"- **数值**: {conf_val:.2f}（标签：**{conf_lbl}**）\n"
+            f"- **说明**: 基于分析窗口终点交易日 **{win_end.date()}** 与自然日 **{date.today()}** 的间隔；"
+            "间隔越大表示离最新收盘越远，季节性与趋势解读可参考性越低。\n\n"
+        )
 
         os.makedirs(IMAGE_DIR, exist_ok=True)
         forecast_img = _safe_filename("prophet_forecast")
@@ -1800,7 +1870,7 @@ class ProphetAnalysisTool(BaseTool):
             + "\n\n"
             + _markdown_image(os.path.join("image_show", comp_img))
         )
-        return f"{meta}{summary_md}{img_md}"
+        return f"{meta}{conf_md}{summary_md}{img_md}"
 
 
 def init_agent_service():

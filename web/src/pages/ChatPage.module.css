@@ -382,6 +382,11 @@
   color: #6a7a9a;
 }
 
+.feedInfo {
+  color: #8ab4d9;
+  font-size: 0.85rem;
+}
+
 .feedErr {
   color: #e07070;
   font-size: 0.85rem;

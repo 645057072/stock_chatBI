@@ -54,6 +54,8 @@ export default function ChatPage() {
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  /** 非错误类提示（如撤销操作置信度） */
+  const [infoTip, setInfoTip] = useState<string | null>(null);
   /** 用户一旦开始输入或发送，隐藏中部示例缓存区（与 rows 是否为空解耦，避免失败后缓存重新弹出） */
   const [hideQuickPrompts, setHideQuickPrompts] = useState(false);
   /** 助手请求进行中时已等待秒数（仅展示） */
@@ -117,6 +119,12 @@ export default function ChatPage() {
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [rows, sending]);
+
+  useEffect(() => {
+    if (!infoTip) return;
+    const t = window.setTimeout(() => setInfoTip(null), 5000);
+    return () => window.clearTimeout(t);
+  }, [infoTip]);
 
   useEffect(() => {
     if (!sending) {
@@ -186,8 +194,11 @@ export default function ChatPage() {
     if (!row || row.role !== "user") return;
     setErr(null);
     try {
-      const msgs = await apiChatUndo(rowIndex);
+      const { messages: msgs, confidence } = await apiChatUndo(rowIndex);
       setRows(toRows(msgs));
+      if (confidence != null) {
+        setInfoTip(`撤销已生效，操作置信度 ${confidence}`);
+      }
       await refreshSessions();
     } catch (ex) {
       const msg = ex instanceof Error ? ex.message : "撤销失败";
@@ -320,8 +331,8 @@ export default function ChatPage() {
                       disabled={sending && i !== rows.length - 1}
                       title={
                         sending && i === rows.length - 1
-                          ? "撤销本次咨询：中止等待，不再接收本轮回复（服务端可能仍在处理）"
-                          : "从本条提问起删除之后的对话记录"
+                          ? "撤销本轮：中止客户端等待，不在前端展示本轮回复；服务端若已开始计算仍可能跑完，但不会触发新的重算动作"
+                          : "撤销本条及之后的对话（含本条提问与助手回复）；不要求重新推理，仅从会话记录移除"
                       }
                       onClick={() => void onUndoFromRow(i)}
                     >
@@ -331,7 +342,7 @@ export default function ChatPage() {
                       type="button"
                       className={styles.msgActionBtn}
                       disabled={sending}
-                      title="在当前会话末尾再次发送本条问题，不清空已有问答"
+                      title="在会话末尾追加发送相同原文，保留上方已有问答记录"
                       onClick={() => void onResendFromRow(i, row.text)}
                     >
                       重发
@@ -358,6 +369,7 @@ export default function ChatPage() {
               <span className={styles.thinkingTimer}>（已等待 {thinkingSeconds} 秒）</span>
             </div>
           ) : null}
+          {infoTip ? <div className={styles.feedInfo}>{infoTip}</div> : null}
           {err ? <div className={styles.feedErr}>{err}</div> : null}
           <div ref={bottomRef} />
         </div>
